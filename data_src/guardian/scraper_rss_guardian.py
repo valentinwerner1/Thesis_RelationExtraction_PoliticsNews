@@ -24,13 +24,6 @@ headers =  {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:100.0) G
 
 
 # In[2]:
-#Functions to retrieve information from websites
-def search_rss(link, key_search):
-    '''searches for the key of newest feed of a given link'''
-    feed = feedparser.parse(link)
-    entry = feed.entries[0]
-    return entry[key_search]
-
 def scrape_text(link, name, attrs):#, number):
     """retrieves text from the respective article; input is based on data which is received from rss feed"""
     response = requests.get(link, headers = headers) 

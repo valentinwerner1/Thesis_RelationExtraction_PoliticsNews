@@ -24,6 +24,8 @@ headers =  {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:100.0) G
 
 
 # In[2]:
+
+#Functions for scraping
 def scrape_text(link, name, attrs):#, number):
     """retrieves text from the respective article; input is based on data which is received from rss feed"""
     response = requests.get(link, headers = headers) 

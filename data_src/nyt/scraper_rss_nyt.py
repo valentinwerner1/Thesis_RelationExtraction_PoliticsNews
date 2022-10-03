@@ -7,12 +7,10 @@ import numpy as np
 import pandas as pd
 import sys
 import os 
-os.environ['PYTHONHASHSEED'] = "0" #making sure it hashes everytime the same thing
 
 #Libraries for parsing and getting text from websites
 from codecs import xmlcharrefreplace_errors
 import feedparser
-import hashlib
 import urllib.parse
 import requests
 from bs4 import BeautifulSoup

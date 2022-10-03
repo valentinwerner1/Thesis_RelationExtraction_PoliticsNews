@@ -9,12 +9,10 @@ import pandas as pd
 import sys
 import os 
 import json
-os.environ['PYTHONHASHSEED'] = "0" #making sure it hashes everytime the same thing
 
 #Libraries for parsing and getting text from websites
 from codecs import xmlcharrefreplace_errors
 import feedparser
-import hashlib
 import urllib.parse
 import requests
 from bs4 import BeautifulSoup
@@ -23,9 +21,6 @@ import ssl
 #Loading extras for parsing
 ssl._create_default_https_context = ssl._create_unverified_context #avoiding SSL errors
 headers =  {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:100.0) Gecko/20100101 Firefox/100.0"} #avoiding some bot-shields
-
-
-
 
 # In[2]:
 

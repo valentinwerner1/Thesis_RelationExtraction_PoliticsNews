@@ -7,12 +7,10 @@ import numpy as np
 import pandas as pd
 import sys
 import os 
-os.environ['PYTHONHASHSEED'] = "0" #making sure it hashes everytime the same thing
 
 #Libraries for parsing and getting text from websites
 from codecs import xmlcharrefreplace_errors
 import feedparser
-import hashlib
 import urllib.parse
 import requests
 from bs4 import BeautifulSoup
@@ -60,14 +58,14 @@ def full_scrape_guardian():
 # In[3]:
 
 # Load existing DataFrame of guardian articles
-df = pd.read_csv(r"C:\Users\svawe\Thesis_RelationExtraction_PoliticsNews\data_src\guardian\guardian_29092022.csv", index_col = 0)
+df = pd.read_csv(r"C:\Users\svawe\Thesis_RelationExtraction_PoliticsNews\data_src\guardian\guardian.csv", index_col = 0)
 
 #Scraping guardian news articles
 new_df = pd.DataFrame(full_scrape_guardian(), columns = ["text","author","title"])
 
 df = pd.concat([df, new_df], ignore_index = True)
 
-df.to_csv(r"C:\Users\svawe\Thesis_RelationExtraction_PoliticsNews\data_src\guardian\guardian_29092022.csv")
+df.to_csv(r"C:\Users\svawe\Thesis_RelationExtraction_PoliticsNews\data_src\guardian\guardian.csv")
 print(f"{new_df.shape[0]} articles have been added")
 
 # %%

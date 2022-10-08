@@ -63,13 +63,13 @@ def full_scrape_bbc():
 # In[3]:
 
 # Load existing DataFrame of bbc articles
-df = pd.read_csv(r"C:\Users\svawe\Thesis_RelationExtraction_PoliticsNews\data_src\bbc\bbc.csv", index_col = 0)
+df = pd.read_csv(r"C:\Users\svawe\Thesis_RelationExtraction_PoliticsNews\data_src\bbc\bbc2.csv", index_col = 0)
 
 #Scraping bbc news articles
 new_df = pd.DataFrame(full_scrape_bbc(), columns = ["text","author","title"])
 
 df = pd.concat([df, new_df], ignore_index = True)
 
-df.to_csv(r"C:\Users\svawe\Thesis_RelationExtraction_PoliticsNews\data_src\bbc\bbc.csv")
+df.to_csv(r"C:\Users\svawe\Thesis_RelationExtraction_PoliticsNews\data_src\bbc\bbc2.csv")
 print(f"{new_df.shape[0]} articles have been added")
 # %%

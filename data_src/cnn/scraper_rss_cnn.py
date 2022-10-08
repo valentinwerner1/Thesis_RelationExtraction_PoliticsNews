@@ -65,13 +65,13 @@ def full_scrape_cnn():
 # In[3]:
 
 # Load existing DataFrame of cnn articles
-df = pd.read_csv(r"C:\Users\svawe\Thesis_RelationExtraction_PoliticsNews\data_src\cnn\cnn.csv", index_col = 0)
+df = pd.read_csv(r"C:\Users\svawe\Thesis_RelationExtraction_PoliticsNews\data_src\cnn\cnn2.csv", index_col = 0)
 
 #Scraping cnn news articles
 new_df = pd.DataFrame(full_scrape_cnn(), columns = ["text","author","title"])
 
 df = pd.concat([df, new_df], ignore_index = True)
 
-df.to_csv(r"C:\Users\svawe\Thesis_RelationExtraction_PoliticsNews\data_src\cnn\cnn.csv")
+df.to_csv(r"C:\Users\svawe\Thesis_RelationExtraction_PoliticsNews\data_src\cnn\cnn2.csv")
 print(f"{new_df.shape[0]} articles have been added")
 # %%

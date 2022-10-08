@@ -49,7 +49,7 @@ def full_scrape_bbc():
                     content = soup.find("script")
                     author = json.loads(content.text)["author"]["name"]
                 except:
-                    author = "BBC News - Couldn't scrape author"
+                    author = "BBC News, author unspecified"
 
                 if text == "":
                     print(f"could not scrape article {title}")

@@ -51,7 +51,7 @@ def full_scrape_post():
                 content = soup.find_all("div", "article-body")#[number]
                 text = ""
                 for para in content:
-                    text += para.text
+                    text = text + " " + para.text
                 if text == "":
                     print(f"could not scrape article {title}")
                 else: articles.append([text, author, title])

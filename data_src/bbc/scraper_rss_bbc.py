@@ -44,7 +44,7 @@ def full_scrape_bbc():
                 content = soup.find_all("div", "ssrcss-11r1m41-RichTextComponentWrapper ep2nwvo0")#[number]
                 text = ""
                 for para in content:
-                    text += para.text
+                    text = text + " " + para.text
                 try:
                     content = soup.find("script")
                     author = json.loads(content.text)["author"]["name"]

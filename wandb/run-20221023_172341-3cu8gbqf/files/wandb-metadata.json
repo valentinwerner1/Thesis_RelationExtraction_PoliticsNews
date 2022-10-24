@@ -1,0 +1,21 @@
+{
+    "os": "Windows-10-10.0.22000-SP0",
+    "python": "3.9.7",
+    "heartbeatAt": "2022-10-23T15:23:42.385157",
+    "startedAt": "2022-10-23T15:23:41.319213",
+    "docker": null,
+    "cpu_count": 8,
+    "cuda": null,
+    "args": null,
+    "state": "running",
+    "program": "<python with no main file>",
+    "git": {
+        "remote": "git@github.com:valentinwerner1/Thesis_RelationExtraction_PoliticsNews.git",
+        "commit": "7418fa530ad9cb840f0f9d2a9bc4f6e37faea4e6"
+    },
+    "email": "sva.werner@gmail.com",
+    "root": "C:/Users/svawe/Thesis_RelationExtraction_PoliticsNews",
+    "host": "DESKTOP-SEU3VIF",
+    "username": "svawe",
+    "executable": "c:\\Users\\svawe\\anaconda3\\python.exe"
+}

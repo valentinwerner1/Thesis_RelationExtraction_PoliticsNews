@@ -1,0 +1,36 @@
+C:\Users\svawe\anaconda3\lib\site-packages\pytorch_lightning\trainer\connectors\accelerator_connector.py:447: LightningDeprecationWarning: Setting `Trainer(gpus=0)` is deprecated in v1.7 and will be removed in v2.0. Please use `Trainer(accelerator='gpu', devices=0)` instead.
+  rank_zero_deprecation(
+C:\Users\svawe\anaconda3\lib\site-packages\pytorch_lightning\trainer\connectors\accelerator_connector.py:718: UserWarning: You passed `Trainer(accelerator='cpu', precision=16)` but native AMP is not supported on CPU. Using `precision='bf16'` instead.
+  rank_zero_warn(
+Using bfloat16 Automatic Mixed Precision (AMP)
+GPU available: False, used: False
+TPU available: False, using: 0 TPU cores
+IPU available: False, using: 0 IPUs
+HPU available: False, using: 0 HPUs
+  | Name    | Type                         | Params
+---------------------------------------------------------
+0 | model   | BartForConditionalGeneration | 406 M
+1 | loss_fn | CrossEntropyLoss             | 0
+---------------------------------------------------------
+406 M     Trainable params
+0         Non-trainable params
+406 M     Total params
+1,625.194 Total estimated model params size (MB)
+C:\Users\svawe\anaconda3\lib\site-packages\pytorch_lightning\trainer\connectors\data_connector.py:236: PossibleUserWarning: The dataloader, val_dataloader 0, does not have many workers which may be a bottleneck. Consider increasing the value of the `num_workers` argument` (try 8 which is the number of cpus on this machine) in the `DataLoader` init to improve performance.
+  rank_zero_warn(
+Global seed set to 0
+C:\Users\svawe\anaconda3\lib\site-packages\pytorch_lightning\loggers\wandb.py:352: UserWarning: There is a wandb run already in progress and newly created instances of `WandbLogger` will reuse this run. If this is not desired, call `wandb.finish()` before instantiating `WandbLogger`.
+  rank_zero_warn(
+Using bfloat16 Automatic Mixed Precision (AMP)
+GPU available: False, used: False
+TPU available: False, using: 0 TPU cores
+IPU available: False, using: 0 IPUs
+HPU available: False, using: 0 HPUs
+  | Name    | Type                         | Params
+---------------------------------------------------------
+0 | model   | BartForConditionalGeneration | 406 M
+1 | loss_fn | CrossEntropyLoss             | 0
+---------------------------------------------------------
+406 M     Trainable params
+0         Non-trainable params
+406 M     Total params

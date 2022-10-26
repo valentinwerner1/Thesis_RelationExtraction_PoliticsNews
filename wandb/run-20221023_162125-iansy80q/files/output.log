@@ -1,8 +1,0 @@
-C:\Users\svawe\anaconda3\lib\site-packages\pytorch_lightning\trainer\connectors\accelerator_connector.py:447: LightningDeprecationWarning: Setting `Trainer(gpus=0)` is deprecated in v1.7 and will be removed in v2.0. Please use `Trainer(accelerator='gpu', devices=0)` instead.
-  rank_zero_deprecation(
-C:\Users\svawe\anaconda3\lib\site-packages\pytorch_lightning\trainer\connectors\accelerator_connector.py:718: UserWarning: You passed `Trainer(accelerator='cpu', precision=16)` but native AMP is not supported on CPU. Using `precision='bf16'` instead.
-  rank_zero_warn(
-Using bfloat16 Automatic Mixed Precision (AMP)
-GPU available: False, used: False
-TPU available: False, using: 0 TPU cores
-IPU available: False, using: 0 IPUs

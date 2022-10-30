@@ -1,0 +1,5 @@
+
+[38;5;1m✘ Can't find recipe or command 'out'.[0m
+Similar recipes: db-out. If you're using a custom recipe, provide the path to
+the Python file using the -F argument.
+

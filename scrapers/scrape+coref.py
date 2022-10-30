@@ -17,6 +17,12 @@ import requests
 from bs4 import BeautifulSoup
 import ssl
 
+#Libraries for coref
+import spacy
+import crosslingual_coreference
+from crosslingual_coreference import Predictor
+import en_core_web_sm
+
 #Loading extras for parsing
 ssl._create_default_https_context = ssl._create_unverified_context #avoiding SSL errors
 headers =  {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:100.0) Gecko/20100101 Firefox/100.0"} #avoiding some bot-shields
@@ -141,12 +147,22 @@ def post_process(articles, df):
     
     return new_df
 
+def run_coref(new_df):
+    """applies coreference resolution to the new scraped articles"""
+    #load spanbert model, as it is currently one of the state of the art models and achieved best performance on the data
+    predictor = Predictor(language="en_core_web_sm", device=-1, model_name="spanbert")
+    #apply coreference resolution
+    new_df["coref_text"] = new_df.full_text.apply(lambda x: predictor.predict(x)["resolved_text"])
+    
+    return new_df
+
+
 def append_jsonl(new_df):
     """append new dataframe to jsonl file which is input for labeling"""
     
     jsonl = []  #list to collect rows in jsonl format
     for index in new_df.index:
-        jsonl.append({"text":new_df.full_text.iloc[index], "article_id":int(new_df.article_id.iloc[index])})
+        jsonl.append({"text":new_df.coref_text.iloc[index], "article_id":int(new_df.article_id.iloc[index])})
 
     #turn to jsonl file
     with open("data_src/raw/in_label/all_articles.jsonl", 'a') as f: 
@@ -160,8 +176,9 @@ def append_jsonl(new_df):
 # Load existing DataFrame of all articles
 df = pd.read_csv("data_src/raw/all_articles.csv", index_col = 0)
 
-#Getting data from rss feeds
+#Getting data from rss feeds and applying functions
 new_df = post_process(parse_feeds(rss_dict, df), df)
+new_df = run_coref(new_df)
 
 #Append new data to existing jsonl file
 append_jsonl(new_df)

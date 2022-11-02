@@ -1,0 +1,4 @@
+ufal.udpipe
+python-dateutil
+unidecode
+networkx

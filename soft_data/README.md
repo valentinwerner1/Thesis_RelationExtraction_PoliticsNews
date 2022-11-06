@@ -1,28 +1,15 @@
 ## Credits where Credits is due
 
-This code is heavily oriented on the idea of https://github.com/eventdata/UDPetrarch-for-Python3
+The idea behind this code is a variation of https://github.com/eventdata/UDPetrarch-for-Python3 which was heavily alligned for the use case of this project.
 
-Some lines of code have been copied directly, many have been rewritten for the purpose of clearity and simplicity
+None of the code is copied directly from the repository mentioned above, the only files that are identical are dictionary files.
 
-To run this you need to install CoreNLP and UDPipe and specify their respective paths
-
-## Preprocesing
-
-For preprocessing go into /preprocess
-
-The .sh file executes the whole pipeline, simply run
-
-'''
-sh preprocess_articles_from_xml.sh
-'''
-
-after specifying the paths inside .sh file (paths to all necessary directories).
-
-Input format is XML, see /example files -> sample_english_doc.xml = input format; [...]-sent_parsed.xml = output format
 
 ## Annotation
 
-The annotation process is build on PETRARCH. All dictionaries are not created by me, but by the researchers behind CAMEO and PETRARCH.
+Takes a csv file of full length articles, turns it to an xml file to split into sentences using CoreNLP. The separate sentences are then classified into part-of-speech-tokens using spacy and subj-verb-obj triplets are built. If the verb is existing in the CAMEO dictionairy, the respective category is assigned.
 
-For more information see https://github.com/eventdata/UDPetrarch-for-Python3 and https://github.com/openeventdata/petrarch2 
+ All dictionaries are not created by me, but by the researchers behind CAMEO and PETRARCH.
+
+
 

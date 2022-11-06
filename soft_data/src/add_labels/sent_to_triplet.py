@@ -152,7 +152,7 @@ def get_triples(sentence, verb_dict, nlp):
     matches = [merge_trip(group) for group in df_l if not merge_trip(group) == None] #get groups into triplet structure
     
     #turn matches into triples by only keeping those with coded verbs, return code instead of verb
-    triples = [f"<triplet>{match[0]}<subj>{match[2]}<obj>{verb_dict[match[1]]}" for match in matches if match[1].lower() in verb_dict]
+    triples = [f"<triplet>{match[0]}<subj>{match[2]}<obj>{verb_dict[match[1].lower()]}" for match in matches if match[1].lower() in verb_dict]
 
     return triples
 

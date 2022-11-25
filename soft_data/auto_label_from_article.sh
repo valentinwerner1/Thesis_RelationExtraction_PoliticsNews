@@ -4,6 +4,9 @@ FILE_OUT=C:/Users/svawe/Thesis_RelationExtraction_PoliticsNews/soft_data/data/ou
 PICOPATH=C:/Users/svawe/Thesis_RelationExtraction_PoliticsNews/soft_data/src/add_labels/dictionaries/PETR.Internal.Coding.Ontology.txt
 VERBPATH=C:/Users/svawe/Thesis_RelationExtraction_PoliticsNews/soft_data/src/add_labels/dictionaries/newdict.txt
 
+#echo "Preparing environment..."
+#python -m pip install -r requirements.txt
+
 echo "Turning csv into xml..."
 python src/preprocess/csv_to_xml.py $FILENAME/$1 $FILE_OUT/$1.xml
 

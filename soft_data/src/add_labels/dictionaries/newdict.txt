@@ -7084,7 +7084,7 @@ EXPEL {EXPELS EXPELLING EXPELLED }
 - * + (P BY $ [174] #  DEPORT <ss 29 Jun 2007> 
 - * RULER [---] #  OUST
 - * LIMIT [081] #  REMOVE <HUX 3/14/98> 
-- * (P TO + [063] #  DEPORT <OY 27 Aug 2006> 
+- * (P TO + [174] #  DEPORT <OY 27 Aug 2006> 
 - * + [174] #  EXPEL <SLS 02 Oct 2007> 
 
 --- PROHIBIT [172] --- 

@@ -58,6 +58,8 @@ rss_dict = {
 }
 
 os.chdir("..") #puts directory at main
+if os.getcwd() != "/home/valentin_werner/thesis_valentin2":
+    os.chdir(r"/home/valentin_werner/thesis_valentin2")
 
 
 # In[2]:
@@ -66,6 +68,7 @@ os.chdir("..") #puts directory at main
 def get_data(entry, rss, df):
     """get relevant data from rss feeds"""
     data = []   #collects new articles
+    full = []
     dups = 0    #counts duplicates that were not collected again
     for article in entry:
         try: #if any main part is missing, the article is skipped instead of the pipeline breaking
@@ -88,31 +91,38 @@ def get_data(entry, rss, df):
                             else: authors = authors + "; " + name["name"]
                 except:
                     authors = "not mentioned in feed" #many feeds don't include authors in the feed
+                try:
+                    url = article["link"]
+                except:
+                    url = ""
                 data.append([rss, text, desc, authors, date])
+                full.append([rss, text, url]) #added post script, in case we need to scrape full articles later
+
         except:
             print(f"couldn't scrape {article['title']} in {rss}")
     print(f"found {dups} duplicates")
-    return data
+    return data, full
 
 def parse_feeds(rss_dict, df):
     """parses all rss feeds and cals get_data to retrieve information"""
     articles = []
+    articles_url = []
     for rss in rss_dict:
         feed = feedparser.parse(rss_dict[f"{rss}"])
         entry = feed.entries
         if rss == "tass": #because tass has no dedicated world news feed, we extract only entries that link to world articles
             new_entry = [article for article in entry if "tass.com/world/" in article["link"]]
-            data = get_data(new_entry, rss, df)
-            for article in data:
-                articles.append(article)
+            data, full = get_data(new_entry, rss, df)
+            for article in data: articles.append(article)
+            for article in full: articles_url.append(article)
             print(f"done with {rss}")
         else:
-            data = get_data(entry, rss, df)
-            for article in data:
-                articles.append(article)
+            data, full = get_data(entry, rss, df)
+            for article in data: articles.append(article)
+            for article in full: articles_url.append(article)
             print(f"done with {rss}")
     print(f"found {len(articles)} new articles")
-    return articles
+    return articles, articles_url
     
 def post_process(articles, df):
     """create and transform dataframe: generate main text, article id and process time, drop duplicates and unneeded columns"""
@@ -177,7 +187,8 @@ def append_jsonl(new_df):
 df = pd.read_csv("data_src/raw/all_articles.csv", index_col = 0)
 
 #Getting data from rss feeds and applying functions
-new_df = post_process(parse_feeds(rss_dict, df), df)
+articles, articles_url = parse_feeds(rss_dict, df)
+new_df = post_process(articles, df)
 new_df = run_coref(new_df)
 
 #Append new data to existing jsonl file
@@ -186,6 +197,10 @@ append_jsonl(new_df)
 #Concat old and new data and safe as csv of all articles
 df = pd.concat([df, new_df], ignore_index = True)
 df.to_csv("data_src/raw/all_articles.csv")
+
+urls = pd.DataFrame(articles_url, columns = ["paper","title","url"])
+urls_cur = pd.read_csv("data_src/raw/articles_url.csv", index_col = 0)
+pd.concat([urls_cur, urls]).to_csv("data_src/raw/articles_url.csv")
 
 print(f"{new_df.shape[0]} articles have been added")
 

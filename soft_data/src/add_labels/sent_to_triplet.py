@@ -2,6 +2,8 @@ import spacy
 import xml.etree.ElementTree as ET
 from spacy.symbols import nsubj, dobj, pobj, iobj, neg, xcomp, ccomp, VERB
 from gensim.parsing.preprocessing import strip_multiple_whitespaces
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+import torch
 import pandas as pd
 import re
 import os
@@ -20,11 +22,9 @@ def main():
     
     df = pd.DataFrame(found, columns = ["text", "label"])
 
+    new_df = check_entailment(df)
 
-    # df = pd.DataFrame([[line, " ".join(get_triples(line, verb_dict, spec_dict, spec_code, nlp))] for line in read if get_triples(line, verb_dict, spec_dict, spec_code, nlp) != []],
-    #                  columns = ["text", "label"])
-
-    df.to_csv(sys.argv[4])
+    new_df.to_csv(sys.argv[4])
 
 def read_lines(inputparsed):    
     """takes input from CoreNLP sentence parsed file and returns sentences"""
@@ -102,6 +102,7 @@ def verb_code_dict(pico_path, verb_path):
     map_codes = {"DiplomaticCoop" : "Engage In Diplomatic Cooperation", 
                 "MaterialCoop" : "Engage In Material Cooperation",
                 "ProvideAid" : "Provide Aid",
+                "Intend" : "Express Intend to Cooperate",
                 "Exhibit Force Posture": "Exhibit Military Posture",
                 "Use Unconventional Mass Violence" : "Engage In Unconventional Mass Violence"}
     main_codes = {k: (map_codes[v] if v in map_codes else v) for k, v in main_codes.items()}
@@ -209,6 +210,8 @@ def get_triples(sentence, verb_dict, spec_dict, spec_code, nlp):
     """create triplet structure for training from text input, 
     verb_dict needs to be loaded before,
     spacy model needs to be initialized before """
+
+    sentence = sentence.replace(u'\xa0', u' ')
     doc = nlp(sentence)
     verbs = []
 
@@ -279,6 +282,71 @@ def get_triples(sentence, verb_dict, spec_dict, spec_code, nlp):
     full_triple = " ".join(triples)
 
     return full_triple
+
+def check_entailment(df):
+    cuda_ = "cuda" #all GPUS, specify specific GPUs with "cuda:0"
+    device = torch.device(cuda_ if torch.cuda.is_available() else "cpu")
+
+    nli_model = AutoModelForSequenceClassification.from_pretrained('facebook/bart-large-mnli')
+    nli_model.to(device)
+    tokenizer = AutoTokenizer.from_pretrained('facebook/bart-large-mnli')
+
+    #split combined triplets into single triplets
+    new = []
+    for row in df.iterrows():
+        split = re.split("<\w*>", row[1]["label"])[1:] #first one is empty
+        for i in range(int(len(split)/3)): #always pairs of 3
+            sub = split[i*3:i*3+3]
+            new.append([row[1]["text"], sub[0].lstrip().rstrip(), sub[1].lstrip().rstrip(), sub[2].lstrip().rstrip()])
+
+    new_df = pd.DataFrame(new, columns = ["text", "subj", "obj", "label"])
+
+    probs_l = []
+    for row in new_df.iterrows():
+        premise = row[1]["text"]
+        subj = row[1]["subj"]
+        rel = row[1]["label"]
+        obj =  row[1]["obj"]
+
+        hypothesis = f'{subj} does {rel} towards {obj}.'
+
+        # run through model pre-trained on MNLI
+        x = tokenizer.encode(premise, hypothesis, return_tensors='pt',
+                            truncation_strategy='only_first')
+        logits = nli_model(x.to(device))[0]
+
+        # we throw away "neutral" (dim 1) and take the probability of
+        # "entailment" (2) as the probability of the label being true 
+        entail_contradiction_logits = logits[:,[0,2]]
+        probs = entail_contradiction_logits.softmax(dim=1)
+        prob_label_is_true = probs[:,1]
+
+        probs_l.append([row[0], prob_label_is_true.item()])
+    if device != "cpu": torch.cuda.empty_cache()
+
+    new_df = pd.merge(new_df.reset_index(), pd.DataFrame(probs_l, columns = ["index", "prob"]), on = "index")
+    new_df = new_df.drop_duplicates(["text", "prob", "label"], keep = "first")
+
+    keep = new_df[new_df.prob > 0.7]
+
+    #recreate triplets
+    res = []
+    last_txt = ""
+    last_subj = ""
+    for row in keep.iterrows():
+        trip = f"<triplet> {row[1]['subj']} <subj> {row[1]['obj']} <obj> {row[1]['label']}"
+        if row[1]["subj"] == last_subj & row[1]["text"] == last_txt:
+            #if shared subject, no new row
+            res[-1] = [res[-1][0], res[-1][1] + f" <subj> {row[1]['obj']} <obj> {row[1]['label']}"]
+        elif row[1]["text"] == last_txt:
+            res[-1] = [res[-1][0], res[-1][1] + " " + trip]
+        else:
+            res.append([row[1]["text"], trip])
+        last_txt = row[1]["text"]
+        last_subj = row[1]["subj"]
+
+    df_new = pd.DataFrame(res, columns = ["text","label"])
+    return df_new
 
 if __name__ == "__main__":
     main()

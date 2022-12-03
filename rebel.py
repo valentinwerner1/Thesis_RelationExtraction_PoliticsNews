@@ -11,7 +11,6 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from typing import Any, Union, List, Optional, Sequence
 
 import re
-import transformers 
 
 import torch
 from torch.utils.data import DataLoader
@@ -23,7 +22,10 @@ from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.callbacks import LearningRateMonitor
 
 import datasets
-from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MultiLabelBinarizer
+from iterstrat.ml_stratifiers import MultilabelStratifiedShuffleSplit
+
+import transformers 
 from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
@@ -66,6 +68,9 @@ cameo_to_penta = {
 data = pd.read_csv("soft_data/data/out_data/entail_articles_url_coref3.csv.done.csv", index_col = 0)
 data = data.rename(columns = {"label":"triplets"})
 
+#only if using coref3 or earlier
+data["triplets"] = data.triplets.apply(lambda x: x.replace("Intend", "Express Intend to Cooperate"))
+
 if sys.argv[1] == "pentacode":
     penta_map = []
     last_txt = ""
@@ -77,12 +82,57 @@ if sys.argv[1] == "pentacode":
     data = pd.DataFrame(penta_map, columns = ["text","triplets"])
     print("initialized Pentacode data")
 
-x_train, x_val, y_train, y_val = train_test_split(data.text, data.triplets, test_size = 0.15)
-x_val, x_test, y_val, y_test = train_test_split(x_val, y_val, test_size = 0.5)
+    penta_opts = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
+    #extract the categorized relation for stratified split on pentacode
+    relation = []
+    for row in data.iterrows():
+        sub_rels = []
+        for opt in penta_opts:
+            for count in range(row[1]["triplets"].count(opt)):
+                sub_rels.append(opt)
+        relation.append(sub_rels)
+    data["relations"] = relation  
+
+else: 
+    #extract the categorized relation for stratified split on cameo codes
+    relation = []
+    for row in data.iterrows():
+        sub_rels = []
+        for cameo in cameo_to_penta.keys():
+            for count in range(row[1]["label"].count(cameo)):
+                sub_rels.append(cameo)
+        relation.append(sub_rels)
+    data["relations"] = relation      
+
+#create stratified splits
+mlb = MultiLabelBinarizer()
+accept_MLB = mlb.fit_transform(data["relations"])
+
+cols = [f"r{i}" for i in range(len(accept_MLB[0]))]
+data = pd.concat([data, pd.DataFrame(accept_MLB, columns = cols)], axis=1)
+
+#select indexes for train & val
+splits = MultilabelStratifiedShuffleSplit(test_size=round(len(data.text) * 0.85), train_size= (len(data.text) - round(len(data.text) * 0.85)))
+val_idx, train_idx = next(splits.split(data.text, data[cols]))
+
+train = data.iloc[train_idx][["text", "triplets"]]
+pre_split = data.iloc[val_idx]
+
+#select indexes test & val
+splits = MultilabelStratifiedShuffleSplit(test_size=round(len(pre_split.text) * 0.5), train_size= (len(pre_split.text) - round(len(pre_split.text) * 0.5)))
+val_idx, test_idx = next(splits.split(pre_split.text, pre_split[cols]))
+
+val = pre_split.iloc[val_idx][["text","triplets"]]
+test = pre_split.iloc[test_idx][["text", "triplets"]]
+
+print("train shape", train.shape)
+print("val shape", val.shape)
+print("test shape", test.shape)
+
 data_dict = {
-    "train": pd.DataFrame(zip(x_train, y_train), columns = ["text","triplets"]), 
-    "val": pd.DataFrame(zip(x_val, y_val), columns = ["text","triplets"]), 
-    "test": pd.DataFrame(zip(y_test, y_test), columns = ["text","triplets"])
+    "train": train, 
+    "val": val, 
+    "test": test
 }
 
 #In[3]: Define config

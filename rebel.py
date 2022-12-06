@@ -99,7 +99,7 @@ else:
     for row in data.iterrows():
         sub_rels = []
         for cameo in cameo_to_penta.keys():
-            for count in range(row[1]["label"].count(cameo)):
+            for count in range(row[1]["triplets"].count(cameo)):
                 sub_rels.append(cameo)
         relation.append(sub_rels)
     data["relations"] = relation      
@@ -108,18 +108,18 @@ else:
 mlb = MultiLabelBinarizer()
 accept_MLB = mlb.fit_transform(data["relations"])
 
-cols = [f"r{i}" for i in range(len(accept_MLB[0]))]
+cols = [f"rel{i}" for i in range(len(accept_MLB[0]))]
 data = pd.concat([data, pd.DataFrame(accept_MLB, columns = cols)], axis=1)
 
 #select indexes for train & val
-splits = MultilabelStratifiedShuffleSplit(test_size=round(len(data.text) * 0.85), train_size= (len(data.text) - round(len(data.text) * 0.85)))
+splits = MultilabelStratifiedShuffleSplit(test_size=round(len(data.text) * 0.85), train_size= (len(data.text) - round(len(data.text) * 0.85)), random_state = 0)
 val_idx, train_idx = next(splits.split(data.text, data[cols]))
 
 train = data.iloc[train_idx][["text", "triplets"]]
 pre_split = data.iloc[val_idx]
 
 #select indexes test & val
-splits = MultilabelStratifiedShuffleSplit(test_size=round(len(pre_split.text) * 0.5), train_size= (len(pre_split.text) - round(len(pre_split.text) * 0.5)))
+splits = MultilabelStratifiedShuffleSplit(test_size=round(len(pre_split.text) * 0.5), train_size= (len(pre_split.text) - round(len(pre_split.text) * 0.5)), random_state = 0)
 val_idx, test_idx = next(splits.split(pre_split.text, pre_split[cols]))
 
 val = pre_split.iloc[val_idx][["text","triplets"]]
@@ -162,11 +162,9 @@ class conf:
     warm_up = 2 #num of epochs to warm_up on
 
     #training
-    max_steps = 1200000
-    samples_interval = 1000
-
-    monitor_var  = "val_loss"
-    monitor_var_mode = "min"
+    monitor_var  = "val_F1_micro"
+    monitor_var_mode = "max"
+    samples_interval = 100
     # val_check_interval = 0.5
     # val_percent_check = 0.1
 
@@ -174,20 +172,20 @@ class conf:
     checkpoint_path = f"models/{model_name}"
     save_top_k = 1
 
-    early_stopping = False
-    patience = "5"
+    early_stopping = True
+    patience = 10
 
     length_penalty = 0
     no_repeat_ngram_size = 0
     num_beams = 3
-    precision = 16
+    precision = 16 
     amp_level = None
 
 #In[5]: Pytorch Lightning DataModule
 
 class GetData(pl.LightningDataModule):
     def __init__(self, conf: conf, tokenizer: AutoTokenizer, model: AutoModelForSeq2SeqLM):
-        """init params from config"""
+        """initialize params from config"""
         super().__init__()
         self.tokenizer = tokenizer
         self.model = model
@@ -269,8 +267,7 @@ class BaseModule(pl.LightningModule):
         self.model = model
         self.tokenizer = tokenizer
         self.ontology = conf.ontology
-        #self.loss_fn = label_smoothed_nll_loss
-        self.loss_fn = torch.nn.CrossEntropyLoss(ignore_index=-100)
+        self.loss_fn = label_smoothed_nll_loss #torch.nn.CrossEntropyLoss(ignore_index=-100)
         self.num_beams = conf.num_beams
 
     def forward(self, inputs, labels, *args):
@@ -280,7 +277,6 @@ class BaseModule(pl.LightningModule):
         return output_dict
 
     def training_step(self, batch: dict, batch_idx: int):
-        ##### check later if labels = batch["labels"] also works
         labels = batch.pop("labels")
         labels_original = labels.clone()
         batch["decoder_input_ids"] = torch.where(labels != -100, labels, self.config.pad_token_id)
@@ -291,15 +287,20 @@ class BaseModule(pl.LightningModule):
 
         batch["labels"] = labels_original
 
-        #### ig i dont have this
-        if 'loss_aux' in forward_output:
-            self.log('loss_classifier', forward_output['loss_aux'])
-            return forward_output['loss'] + forward_output['loss_aux']
+        forward_output['tr_loss'] = forward_output['loss'].mean().detach()
+        if labels.shape[-1] < conf.max_length:
+            forward_output['labels'] = self._pad_tensors_to_max_len(labels, conf.max_length)
+        else:
+            forward_output['labels'] = labels
+        
+        outputs = {}
+        outputs['predictions'], outputs['labels'] = self.generate_triples(batch, labels)
+        outputs["loss"] = forward_output['loss']
+        return outputs
 
-        return forward_output['loss']
+        #return forward_output['loss']
 
     def validation_step(self, batch: dict, batch_idx):
-        #### pop maybe not needed?
         labels = batch.pop("labels")
         batch["decoder_input_ids"] = torch.where(labels != -100, labels, self.config.pad_token_id)
         labels = shift_tokens_left(labels, -100)
@@ -319,7 +320,6 @@ class BaseModule(pl.LightningModule):
         metrics = {}
         metrics['val_loss'] = forward_output['loss']
 
-        #### only 1? so why loop lmao
         for key in sorted(metrics.keys()):
             self.log(key, metrics[key])
 
@@ -330,7 +330,6 @@ class BaseModule(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
 
-        #### popping again
         labels = batch.pop("labels")
         batch["decoder_input_ids"] = torch.where(labels != -100, labels, self.config.pad_token_id)
         labels = shift_tokens_left(labels, -100)
@@ -352,12 +351,9 @@ class BaseModule(pl.LightningModule):
         metrics = {}
         metrics['test_loss'] = forward_output['loss']
 
-        #### dont i only have one metric anyways?
         for key in sorted(metrics.keys()):
             self.log(key, metrics[key], prog_bar=True)
         
-        self.log("lr", optimizer.get_last_lr())
-
         #### what does this actually do? how does this change everything
         # if self.hparams.finetune:
         #     return {'predictions': self.forward_samples(batch, labels)}
@@ -367,10 +363,22 @@ class BaseModule(pl.LightningModule):
         outputs['predictions'], outputs['labels'] = self.generate_triples(batch, labels)
         return outputs
 
-
+    def training_epoch_end(self, output: dict):
+        
+        print("triggered train epoch end")
+        if self.ontology == "pentacode":
+            relations = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
+        else:
+            relations = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
+        
+        scores, precision, recall, f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
+        print("train: ", f1)
+        self.log('train_prec_micro', precision)
+        self.log('train_recall_micro', recall)
+        self.log('train_F1_micro', f1)
 
     def validation_epoch_end(self, output: dict):
-        
+
         if self.ontology == "pentacode":
             relations = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
         else:
@@ -382,7 +390,7 @@ class BaseModule(pl.LightningModule):
         self.log('val_F1_micro', f1)
 
     def test_epoch_end(self, output: dict):
-        
+
         if self.ontology == "pentacode":
             relations = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
         else:
@@ -443,7 +451,7 @@ class BaseModule(pl.LightningModule):
 
         def lr_schedule(epoch):
             if epoch < conf.warm_up: lr_scale =  0.1
-            else: lr_scale = 1 / (epoch**0.3)
+            else: lr_scale = 1 / (epoch**0.25)
             return lr_scale
 
         scheduler = lr_scheduler.LambdaLR(
@@ -456,6 +464,27 @@ class BaseModule(pl.LightningModule):
 
 
 #In[7]: Helper functions
+
+#from REBEL
+def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
+    """From fairseq"""
+    if target.dim() == lprobs.dim() - 1:
+        target = target.unsqueeze(-1)
+    nll_loss = -lprobs.gather(dim=-1, index=target)
+    smooth_loss = -lprobs.sum(dim=-1, keepdim=True)
+    if ignore_index is not None:
+        pad_mask = target.eq(ignore_index)
+        nll_loss.masked_fill_(pad_mask, 0.0)
+        smooth_loss.masked_fill_(pad_mask, 0.0)
+    else:
+        nll_loss = nll_loss.squeeze(-1)
+        smooth_loss = smooth_loss.squeeze(-1)
+
+    nll_loss = nll_loss.sum()  
+    smooth_loss = smooth_loss.sum()
+    eps_i = epsilon / lprobs.size(-1)
+    loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss
+    return loss, nll_loss
 
 #from REBEL
 class GenerateTextSamplesCallback(Callback):
@@ -497,8 +526,7 @@ class GenerateTextSamplesCallback(Callback):
         pl_module.train()
         decoded_preds = pl_module.tokenizer.batch_decode(generated_tokens, skip_special_tokens=False)
 
-        #If ignore pad token for loss == True 
-            # Replace -100 in the labels as we can't decode them.
+        # Replace -100 in the labels as we can't decode them.
         labels = torch.where(labels != -100, labels, pl_module.tokenizer.pad_token_id)
 
         decoded_labels = pl_module.tokenizer.batch_decode(labels, skip_special_tokens=False)
@@ -557,85 +585,7 @@ def extract_triplets(text):
         triplets.append({'head': subject.strip(), 'type': relation.strip(),'tail': object_.strip()})
     return triplets
 
-#from REBEL 
-def score(key, prediction, verbose=False):
-    correct_by_relation = Counter()
-    guessed_by_relation = Counter()
-    gold_by_relation    = Counter()
-
-    # Loop over the data to compute a score
-    for row in range(len(prediction)):
-        gold = key[row]
-        guess = prediction[row]
-         
-        if gold == NO_RELATION and guess == NO_RELATION:
-            pass
-        elif gold == NO_RELATION and guess != NO_RELATION:
-            guessed_by_relation[guess] += 1
-        elif gold != NO_RELATION and guess == NO_RELATION:
-            gold_by_relation[gold] += 1
-        elif gold != NO_RELATION and guess != NO_RELATION:
-            guessed_by_relation[guess] += 1
-            gold_by_relation[gold] += 1
-            if gold == guess:
-                correct_by_relation[guess] += 1
-
-    # Print verbose information
-    if verbose:
-        print("Per-relation statistics:")
-        relations = gold_by_relation.keys()
-        longest_relation = 0
-        for relation in sorted(relations):
-            longest_relation = max(len(relation), longest_relation)
-        for relation in sorted(relations):
-            # (compute the score)
-            correct = correct_by_relation[relation]
-            guessed = guessed_by_relation[relation]
-            gold    = gold_by_relation[relation]
-            prec = 1.0
-            if guessed > 0:
-                prec = float(correct) / float(guessed)
-            recall = 0.0
-            if gold > 0:
-                recall = float(correct) / float(gold)
-            f1 = 0.0
-            if prec + recall > 0:
-                f1 = 2.0 * prec * recall / (prec + recall)
-            # (print the score)
-            sys.stdout.write(("{:<" + str(longest_relation) + "}").format(relation))
-            sys.stdout.write("  P: ")
-            if prec < 0.1: sys.stdout.write(' ')
-            if prec < 1.0: sys.stdout.write(' ')
-            sys.stdout.write("{:.2%}".format(prec))
-            sys.stdout.write("  R: ")
-            if recall < 0.1: sys.stdout.write(' ')
-            if recall < 1.0: sys.stdout.write(' ')
-            sys.stdout.write("{:.2%}".format(recall))
-            sys.stdout.write("  F1: ")
-            if f1 < 0.1: sys.stdout.write(' ')
-            if f1 < 1.0: sys.stdout.write(' ')
-            sys.stdout.write("{:.2%}".format(f1))
-            sys.stdout.write("  #: %d" % gold)
-            sys.stdout.write("\n")
-        print("")
-
-    # Print the aggregate score
-    if verbose:
-        print("Final Score:")
-    prec_micro = 1.0
-    if sum(guessed_by_relation.values()) > 0:
-        prec_micro   = float(sum(correct_by_relation.values())) / float(sum(guessed_by_relation.values()))
-    recall_micro = 0.0
-    if sum(gold_by_relation.values()) > 0:
-        recall_micro = float(sum(correct_by_relation.values())) / float(sum(gold_by_relation.values()))
-    f1_micro = 0.0
-    if prec_micro + recall_micro > 0.0:
-        f1_micro = 2.0 * prec_micro * recall_micro / (prec_micro + recall_micro)
-    print("Precision (micro): {:.3%}".format(prec_micro))
-    print("   Recall (micro): {:.3%}".format(recall_micro))
-    print("       F1 (micro): {:.3%}".format(f1_micro))
-    return prec_micro, recall_micro, f1_micro
-
+#from REBEL
 '''Adapted from: https://github.com/btaille/sincere/blob/6f5472c5aeaf7ef7765edf597ede48fdf1071712/code/utils/evaluation.py'''
 def re_score(pred_relations, gt_relations, relation_types, mode="boundaries"):
     """Evaluate RE predictions
@@ -657,7 +607,6 @@ def re_score(pred_relations, gt_relations, relation_types, mode="boundaries"):
     else:
         relation_types = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
       
-    # relation_types = [v for v in relation_types if not v == "None"]
     scores = {rel: {"tp": 0, "fp": 0, "fn": 0} for rel in relation_types + ["ALL"]}
 
     # Count GT relations and Predicted relations
@@ -766,14 +715,14 @@ def train(conf):
     tokenizer = transformers.AutoTokenizer.from_pretrained("Babelscape/rebel-large", use_fast = conf.use_fast_tokenizer,
         additional_special_tokens = ["<obj>", "<subj>", "<triplet>", "<head>", "</head>", "<tail>", "</tail>", "<MASK>"])
     config = transformers.AutoConfig.from_pretrained("Babelscape/rebel-large")
-    model = transformers.AutoModelForSeq2SeqLM.from_pretrained("Babelscape/rebel-large")#, config = config)
+    model = transformers.AutoModelForSeq2SeqLM.from_pretrained("Babelscape/rebel-large", config = config)
 
     model.resize_token_embeddings(len(tokenizer))
 
     pl_data_module = GetData(conf, tokenizer, model)
     pl_module = BaseModule(conf, config, tokenizer, model)
 
-    wandb_logger = WandbLogger(project = "project/finetune".split('/')[-1].replace('.py', ''), name = "finetune")
+    wandb_logger = WandbLogger(project = "project/pre_train".split('/')[-1].replace('.py', ''), name = "pre_train")
 
     callbacks_store = []
 
@@ -786,17 +735,14 @@ def train(conf):
             )
         )
 
-    # callbacks_store.append(
-    #     ModelCheckpoint(
-    #         monitor=conf.monitor_var,
-    #         # monitor=None,
-    #         dirpath=f'models/{conf.model_name}',
-    #         save_top_k=conf.save_top_k,
-    #         verbose=True,
-    #         save_last=True,
-    #         mode=conf.monitor_var_mode
-    #     )
-    # )
+    # callbacks_store.append(ModelCheckpoint(dirpath="checkpoints/", 
+    #                                     filename="{epoch}-{val_F1_micro:.2f}", 
+    #                                     monitor="val_F1_micro", 
+    #                                     verbose=True, 
+    #                                     save_top_k=1, 
+    #                                     mode='max', 
+    #                                     every_n_epochs=1))
+
     callbacks_store.append(GenerateTextSamplesCallback(conf.samples_interval))
     callbacks_store.append(LearningRateMonitor(logging_interval='step'))
 
@@ -805,21 +751,18 @@ def train(conf):
         devices = conf.gpus,
         accumulate_grad_batches=conf.gradient_acc_steps,
         gradient_clip_val=conf.gradient_clip_value,
-        #val_check_interval=conf.val_check_interval,
         max_epochs = 30,
         min_epochs = 5,
         callbacks=callbacks_store,
-        max_steps=conf.max_steps,
-        # max_steps=total_steps,
         reload_dataloaders_every_n_epochs = conf.masking, 
         precision=conf.precision,
         amp_level=conf.amp_level,
         logger=wandb_logger,
-        #resume_from_checkpoint=conf.checkpoint_path,
-        #limit_val_batches=conf.val_percent_check
     )
 
     trainer.fit(pl_module, datamodule=pl_data_module)
+
+    trainer.test(pl_module, datamodule=pl_data_module)
 
 #In[8]: train model
 

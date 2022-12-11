@@ -1,6 +1,7 @@
 import spacy
+spacy.prefer_gpu() #maybe us en_core_web_lg instead of trf if no gpu
 import xml.etree.ElementTree as ET
-from spacy.symbols import nsubj, dobj, pobj, iobj, neg, xcomp, ccomp, VERB
+from spacy.symbols import nsubj, dobj, pobj, iobj, neg, xcomp, ccomp, VERB, AUX
 from gensim.parsing.preprocessing import strip_multiple_whitespaces
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import torch
@@ -10,14 +11,14 @@ import os
 import sys
 
 def main():
-    nlp = spacy.load('en_core_web_lg')
+    nlp = spacy.load('en_core_web_trf')
     read = read_lines(sys.argv[1])
 
     verb_dict, spec_dict, spec_code = verb_code_dict(sys.argv[2], sys.argv[3])
 
     found = []
     not_found = []
-    for line in read:
+    for idx, line in enumerate(read):
         matched, not_matched = get_triples(line, verb_dict, spec_dict, spec_code, nlp)
         if len(not_matched) != 4:   #if list contains sublists (e.g. [[subj, rel, obj, sent], [[subj, rel, obj, sent], [subj, rel, obj, sent]]])
             for sublist in not_matched:
@@ -25,24 +26,21 @@ def main():
         else: not_found.append(not_matched)
         if matched != " ".join([]):
             found.append([line, matched])
+
+        if idx % 10000 == 0: print(f"dont with tagging line {idx} out of {len(read)}")
     
     df = pd.DataFrame(found, columns = ["text", "label"])
-<<<<<<< HEAD
     df.to_csv(sys.argv[4])
     print(df.shape)
     df_fix = pd.DataFrame(not_found, columns = ["subj", "rel", "obj", "text"])
     df_fix.to_csv("unmachted.csv")
     print(df_fix.shape)
-=======
->>>>>>> 3c835c7f58b42976177c0517a09e9f0e78963599
 
+    print("starting entailment prediction...")
     new_df = check_entailment(df)
 
     new_df.to_csv(sys.argv[4])
-<<<<<<< HEAD
     print("dataframe saved...")
-=======
->>>>>>> 3c835c7f58b42976177c0517a09e9f0e78963599
 
 def read_lines(inputparsed):    
     """takes input from CoreNLP sentence parsed file and returns sentences"""
@@ -238,32 +236,47 @@ def get_triples(sentence, verb_dict, spec_dict, spec_code, nlp):
             if neg in [child.dep for child in possible_verb.children]: continue
             else: 
                 for possible_subject in possible_verb.children: 
-                    if possible_subject.dep == xcomp or possible_subject.dep == ccomp:   #subj / obj of composed verb should also be subj / obj of main verb
-                        main_verb = possible_subject
-                        main_idx = possible_subject.idx
-                        
+                
+                    if possible_subject.dep == ccomp:   #subj / obj of composed verb should also be subj / obj of main verb
+                        sub_verb = possible_subject
+                        sub_idx = possible_subject.idx
                         for chunk in doc.noun_chunks:
                             #check if any words of the chunk are relevant entities 
-                            if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
-                                if chunk.root.dep_ == "poss" or chunk.root.dep_ == "prep":
-                                    if chunk.root.head.head.idx == possible_verb.idx:
-                                        verbs.append([main_idx, main_verb.lemma_, chunk.text, chunk.root.head.dep_])
+                            #if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
+                            if chunk.root.dep_ == "poss" or chunk.root.dep_ == "prep":
+                                if chunk.root.head.head.idx == possible_verb.idx or chunk.root.head.head.idx == sub_idx:
+                                    verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.dep_])
 
-                                else:
-                                    if chunk.root.head.idx == possible_verb.idx:
-                                        verbs.append([main_idx, main_verb.lemma_, chunk.text, chunk.root.dep_])
+                            else:
+                                if chunk.root.head.idx == possible_verb.idx or chunk.root.head.head.idx == sub_idx:
+                                    verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.dep_])
 
 
                 for chunk in doc.noun_chunks:       #for normal verbs, check chunks directly
                     #check if any words of the chunk are relevant entities 
-                    if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
-                        if chunk.root.head.dep_ == "poss" or chunk.root.head.dep_ == "prep":
-                            if chunk.root.head.head.idx == possible_verb.idx:
-                                verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.head.dep_])
+                    #if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
+                    if chunk.root.head.dep_ == "poss" or chunk.root.head.dep_ == "prep":
+                        if chunk.root.head.head.idx == possible_verb.idx:
+                            verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.dep_])
+
+                    else:
+                        if chunk.root.head.idx == possible_verb.idx:
+                            verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.dep_])
+        elif possible_verb.pos == AUX:# or possible_verb.pos == VERB:
+            for possible_subject in possible_verb.children: 
+                if possible_subject.dep == xcomp:   #subj / obj of composed verb should also be subj / obj of main verb
+                    sub_verb = possible_subject
+                    sub_idx = possible_subject.idx
+                    for chunk in doc.noun_chunks:
+                        #check if any words of the chunk are relevant entities 
+                        #if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
+                        if chunk.root.dep_ == "poss" or chunk.root.dep_ == "prep":
+                            if chunk.root.head.idx == possible_verb.idx or chunk.root.head.head.idx == sub_idx:
+                                verbs.append([possible_verb.idx, sub_verb.lemma_, chunk.text, chunk.root.dep_])
 
                         else:
-                            if chunk.root.head.idx == possible_verb.idx:
-                                verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.dep_])
+                            if chunk.root.head.idx == possible_verb.idx or chunk.root.head.head.idx == sub_idx:
+                                verbs.append([possible_verb.idx, sub_verb.lemma_, chunk.text, chunk.root.dep_])
 
 
     #priority for subj-relation-obj triplets
@@ -418,7 +431,7 @@ def check_entailment(df):
     new_df = pd.merge(new_df.reset_index(), pd.DataFrame(probs_l, columns = ["index", "prob"]), on = "index")
     new_df = new_df.drop_duplicates(["text", "prob", "label"], keep = "first")
 
-    keep = new_df[new_df.prob > 0.7]
+    keep = new_df[new_df.prob > 0.55]
 
     #recreate triplets
     res = []
@@ -426,17 +439,17 @@ def check_entailment(df):
     last_subj = ""
     for row in keep.iterrows():
         trip = f"<triplet> {row[1]['subj']} <subj> {row[1]['obj']} <obj> {row[1]['label']}"
-        if row[1]["subj"] == last_subj & row[1]["text"] == last_txt:
+        if row[1]["subj"] == last_subj and row[1]["text"] == last_txt:
             #if shared subject, no new row
             res[-1] = [res[-1][0], res[-1][1] + f" <subj> {row[1]['obj']} <obj> {row[1]['label']}"]
         elif row[1]["text"] == last_txt:
             res[-1] = [res[-1][0], res[-1][1] + " " + trip]
         else:
-            res.append([row[1]["text"], trip])
+            res.append([row[1]["text"], trip, row[1]["prob"]])
         last_txt = row[1]["text"]
         last_subj = row[1]["subj"]
 
-    df_new = pd.DataFrame(res, columns = ["text","label"])
+    df_new = pd.DataFrame(res, columns = ["text","label","entail_prob"])
     return df_new
 
 if __name__ == "__main__":

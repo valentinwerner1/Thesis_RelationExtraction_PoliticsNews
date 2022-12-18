@@ -116,6 +116,9 @@ splits = MultilabelStratifiedShuffleSplit(test_size=round(len(data.text) * 0.85)
 val_idx, train_idx = next(splits.split(data.text, data[cols]))
 
 train = data.iloc[train_idx][["text", "triplets"]]
+tr_2 = pd.concat([train,train])
+tr_3 = pd.concat([tr_2, tr_2])
+tr_4 = pd.concat([tr_3, tr_3])
 pre_split = data.iloc[val_idx]
 
 #select indexes test & val
@@ -125,7 +128,7 @@ val_idx, test_idx = next(splits.split(pre_split.text, pre_split[cols]))
 val = pre_split.iloc[val_idx][["text","triplets"]]
 test = pre_split.iloc[test_idx][["text", "triplets"]]
 
-print("train shape", train.shape)
+print("train shape", tr_2.shape)
 print("val shape", val.shape)
 print("test shape", test.shape)
 
@@ -267,7 +270,8 @@ class BaseModule(pl.LightningModule):
         self.model = model
         self.tokenizer = tokenizer
         self.ontology = conf.ontology
-        self.loss_fn = label_smoothed_nll_loss #torch.nn.CrossEntropyLoss(ignore_index=-100)
+        self.loss_fn = label_smoothed_nll_loss 
+        #self.loss_fn = torch.nn.CrossEntropyLoss(ignore_index=-100)
         self.num_beams = conf.num_beams
 
     def forward(self, inputs, labels, *args):
@@ -365,12 +369,13 @@ class BaseModule(pl.LightningModule):
 
     def training_epoch_end(self, output: dict):
         
-        print("triggered train epoch end")
         if self.ontology == "pentacode":
             relations = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
         else:
-            relations = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
-        
+            relations = ["make public statement","appeal","express intend to cooperate","consult","engage in diplomatic cooperation",
+            "engage in material cooperation","provide aid","yield","investigate","demand","disapprove",
+            "reject","threaten","exhibit military posture","protest","reduce relations","coerce",
+            "assault","fight","engage in unconvential mass violence"]
         scores, precision, recall, f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
         print("train: ", f1)
         self.log('train_prec_micro', precision)
@@ -382,8 +387,11 @@ class BaseModule(pl.LightningModule):
         if self.ontology == "pentacode":
             relations = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
         else:
-            relations = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
-        
+            relations = ["make public statement","appeal","express intend to cooperate","consult","engage in diplomatic cooperation",
+            "engage in material cooperation","provide aid","yield","investigate","demand","disapprove",
+            "reject","threaten","exhibit military posture","protest","reduce relations","coerce",
+            "assault","fight","engage in unconvential mass violence"]
+
         scores, precision, recall, f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
         self.log('val_prec_micro', precision)
         self.log('val_recall_micro', recall)
@@ -394,8 +402,11 @@ class BaseModule(pl.LightningModule):
         if self.ontology == "pentacode":
             relations = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
         else:
-            relations = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
-        
+            relations = ["make public statement","appeal","express intend to cooperate","consult","engage in diplomatic cooperation",
+            "engage in material cooperation","provide aid","yield","investigate","demand","disapprove",
+            "reject","threaten","exhibit military posture","protest","reduce relations","coerce",
+            "assault","fight","engage in unconvential mass violence"]
+            
         scores, precision, recall, f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
         self.log('test_prec_micro', precision)
         self.log('test_recall_micro', recall)
@@ -532,11 +543,11 @@ class GenerateTextSamplesCallback(Callback):
         decoded_labels = pl_module.tokenizer.batch_decode(labels, skip_special_tokens=False)
         decoded_inputs = pl_module.tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
 
-        # pl_module.logger.experiment.log_text('generated samples', '\n'.join(decoded_preds).replace('<pad>', ''))
-        # pl_module.logger.experiment.log_text('original samples', '\n'.join(decoded_labels).replace('<pad>', ''))
         for source, translation, gold_output in zip(decoded_inputs, decoded_preds, decoded_labels):
             wandb_table.add_data(
-                source.replace('[PAD]', '').replace("[SEP]",""), translation.replace('[PAD]', '').replace("[SEP]",""), gold_output.replace('[PAD]', '').replace("[SEP]","")
+                source.replace('[PAD]', '').replace("[SEP]",""), 
+                translation.replace('[PAD]', '').replace("[SEP]",""), 
+                gold_output.replace('[PAD]', '').replace("[SEP]","")
             )
         pl_module.logger.experiment.log({"Triplets": wandb_table})
 
@@ -603,7 +614,10 @@ def re_score(pred_relations, gt_relations, relation_types):
     if conf.ontology == "pentacode":
         relation_types = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
     else:
-        relation_types = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
+        relation_types = ["make public statement","appeal","express intend to cooperate","consult","engage in diplomatic cooperation",
+        "engage in material cooperation","provide aid","yield","investigate","demand","disapprove",
+        "reject","threaten","exhibit military posture","protest","reduce relations","coerce",
+        "assault","fight","engage in unconvential mass violence"]
       
     scores = {rel: {"tp": 0, "fp": 0, "fn": 0} for rel in relation_types + ["ALL"]}
 
@@ -705,7 +719,7 @@ def train(conf):
     add_tokens = ["<obj>", "<subj>", "<triplet>", "<head>", "</head>", "<tail>", "</tail>", "<MASK>"]
     tokenizer = transformers.AutoTokenizer.from_pretrained("snowood1/ConfliBERT-scr-uncased", use_fast = conf.use_fast_tokenizer,
             additional_special_tokens = add_tokens)
-    model = transformers.EncoderDecoderModel.from_encoder_decoder_pretrained("snowood1/ConfliBERT-scr-uncased","snowood1/ConfliBERT-scr-uncased")
+    model = transformers.EncoderDecoderModel.from_encoder_decoder_pretrained("snowood1/ConfliBERT-scr-uncased","snowood1/ConfliBERT-scr-uncased", tie_encoder_decoder = True)
 
     config = model.config
     config.decoder_start_token_id = tokenizer.cls_token_id
@@ -748,7 +762,7 @@ def train(conf):
         devices = conf.gpus,
         accumulate_grad_batches=conf.gradient_acc_steps,
         gradient_clip_val=conf.gradient_clip_value,
-        max_epochs = 30,
+        max_epochs = 50,
         min_epochs = 5,
         callbacks=callbacks_store,
         reload_dataloaders_every_n_epochs = conf.masking, 

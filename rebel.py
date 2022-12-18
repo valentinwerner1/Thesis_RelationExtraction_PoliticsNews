@@ -365,29 +365,38 @@ class BaseModule(pl.LightningModule):
 
     def training_epoch_end(self, output: dict):
         
-        print("triggered train epoch end")
+        print("\n\n train eval\n")
         if self.ontology == "pentacode":
             relations = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
         else:
             relations = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
         
-        scores, precision, recall, f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
-        print("train: ", f1)
+        scores, precision, recall, f1, class_scores, class_precision, class_recall, class_f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
+
         self.log('train_prec_micro', precision)
         self.log('train_recall_micro', recall)
         self.log('train_F1_micro', f1)
 
+        self.log('train_prec_micro_class', class_precision)
+        self.log('train_recall_micro_class', class_recall)
+        self.log('train_F1_micro_class', class_f1)
+
     def validation_epoch_end(self, output: dict):
 
+        print("\n\n validation eval\n")
         if self.ontology == "pentacode":
             relations = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
         else:
             relations = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
         
-        scores, precision, recall, f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
+        scores, precision, recall, f1, class_scores, class_precision, class_recall, class_f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
         self.log('val_prec_micro', precision)
         self.log('val_recall_micro', recall)
         self.log('val_F1_micro', f1)
+
+        self.log('val_prec_micro_class', class_precision)
+        self.log('val_recall_micro_class', class_recall)
+        self.log('val_F1_micro_class', class_f1)
 
     def test_epoch_end(self, output: dict):
 
@@ -396,10 +405,14 @@ class BaseModule(pl.LightningModule):
         else:
             relations = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
         
-        scores, precision, recall, f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
+        scores, precision, recall, f1, class_scores, class_precision, class_recall, class_f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
         self.log('test_prec_micro', precision)
         self.log('test_recall_micro', recall)
         self.log('test_F1_micro', f1)
+
+        self.log('test_prec_micro_class', class_precision)
+        self.log('test_recall_micro_class', class_recall)
+        self.log('test_F1_micro_class', class_f1)
 
 
     # additional functions called in main functions
@@ -587,7 +600,7 @@ def extract_triplets(text):
 
 #from REBEL
 '''Adapted from: https://github.com/btaille/sincere/blob/6f5472c5aeaf7ef7765edf597ede48fdf1071712/code/utils/evaluation.py'''
-def re_score(pred_relations, gt_relations, relation_types, mode="boundaries"):
+def re_score(pred_relations, gt_relations, relation_types):
     """Evaluate RE predictions
     Args:
         pred_relations (list) :  list of list of predicted relations (several relations in each sentence)
@@ -600,14 +613,13 @@ def re_score(pred_relations, gt_relations, relation_types, mode="boundaries"):
         vocab (Vocab) :         dataset vocabulary
         mode (str) :            in 'strict' or 'boundaries' """
 
-    assert mode in ["strict", "boundaries"]
-
     if conf.ontology == "pentacode":
         relation_types = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
     else:
         relation_types = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
       
     scores = {rel: {"tp": 0, "fp": 0, "fn": 0} for rel in relation_types + ["ALL"]}
+    class_scores = {rel: {"tp": 0, "fp": 0, "fn": 0} for rel in relation_types + ["ALL"]}
 
     # Count GT relations and Predicted relations
     n_sents = len(gt_relations)
@@ -617,23 +629,22 @@ def re_score(pred_relations, gt_relations, relation_types, mode="boundaries"):
     # Count TP, FP and FN per type
     for pred_sent, gt_sent in zip(pred_relations, gt_relations):
         for rel_type in relation_types:
-            # strict mode takes argument types into account
-            if mode == "strict":
-                pred_rels = {(rel["head"], rel["head_type"], rel["tail"], rel["tail_type"]) for rel in pred_sent if
-                             rel["type"] == rel_type}
-                gt_rels = {(rel["head"], rel["head_type"], rel["tail"], rel["tail_type"]) for rel in gt_sent if
-                           rel["type"] == rel_type}
-
-            # boundaries mode only takes argument spans into account
-            elif mode == "boundaries":
-                pred_rels = {(rel["head"], rel["tail"]) for rel in pred_sent if rel["type"] == rel_type}
-                gt_rels = {(rel["head"], rel["tail"]) for rel in gt_sent if rel["type"] == rel_type}
+            pred_rels = {(rel["head"], rel["tail"]) for rel in pred_sent if rel["type"] == rel_type}
+            gt_rels = {(rel["head"], rel["tail"]) for rel in gt_sent if rel["type"] == rel_type}
 
             scores[rel_type]["tp"] += len(pred_rels & gt_rels)
             scores[rel_type]["fp"] += len(pred_rels - gt_rels)
             scores[rel_type]["fn"] += len(gt_rels - pred_rels)
 
-    # Compute per relation Precision / Recall / F1
+            class_pred = [rel["type"] for rel in pred_sent if rel["type"] == rel_type]
+            class_label = [rel["type"] for rel in gt_sent if rel["type"] == rel_type]
+
+            class_scores[rel_type]["tp"] += min(len(class_pred), len(class_label))
+            class_scores[rel_type]["fp"] += max(len(class_pred)-len(class_label),0)
+            class_scores[rel_type]["fn"] += max(len(class_label)-len(class_pred),0)
+
+
+    # Compute per triplet Precision / Recall / F1
     for rel_type in scores.keys():
         if scores[rel_type]["tp"]:
             scores[rel_type]["p"] = 100 * scores[rel_type]["tp"] / (scores[rel_type]["fp"] + scores[rel_type]["tp"])
@@ -642,12 +653,24 @@ def re_score(pred_relations, gt_relations, relation_types, mode="boundaries"):
             scores[rel_type]["p"], scores[rel_type]["r"] = 0, 0
 
         if not scores[rel_type]["p"] + scores[rel_type]["r"] == 0:
-            scores[rel_type]["f1"] = 2 * scores[rel_type]["p"] * scores[rel_type]["r"] / (
-                    scores[rel_type]["p"] + scores[rel_type]["r"])
+            scores[rel_type]["f1"] = 2 * scores[rel_type]["p"] * scores[rel_type]["r"] / (scores[rel_type]["p"] + scores[rel_type]["r"])
         else:
             scores[rel_type]["f1"] = 0
 
-    # Compute micro F1 Scores
+    # Compute per class Precision / Recall / F1
+    for rel_type in scores.keys():
+        if class_scores[rel_type]["tp"]:
+            class_scores[rel_type]["p"] = 100 * class_scores[rel_type]["tp"] / (class_scores[rel_type]["fp"] + class_scores[rel_type]["tp"])
+            class_scores[rel_type]["r"] = 100 * class_scores[rel_type]["tp"] / (class_scores[rel_type]["fn"] + class_scores[rel_type]["tp"])
+        else:
+            class_scores[rel_type]["p"], class_scores[rel_type]["r"] = 0, 0
+
+        if not class_scores[rel_type]["p"] + class_scores[rel_type]["r"] == 0:
+            class_scores[rel_type]["f1"] = 2 * class_scores[rel_type]["p"] * class_scores[rel_type]["r"] / (class_scores[rel_type]["p"] + class_scores[rel_type]["r"])
+        else:
+            class_scores[rel_type]["f1"] = 0
+
+    # Compute micro F1 Scores, relations
     tp = sum([scores[rel_type]["tp"] for rel_type in relation_types])
     fp = sum([scores[rel_type]["fp"] for rel_type in relation_types])
     fn = sum([scores[rel_type]["fn"] for rel_type in relation_types])
@@ -667,16 +690,34 @@ def re_score(pred_relations, gt_relations, relation_types, mode="boundaries"):
     scores["ALL"]["fp"] = fp
     scores["ALL"]["fn"] = fn
 
-    # Compute Macro F1 Scores
-    scores["ALL"]["Macro_f1"] = np.mean([scores[ent_type]["f1"] for ent_type in relation_types])
-    scores["ALL"]["Macro_p"] = np.mean([scores[ent_type]["p"] for ent_type in relation_types])
-    scores["ALL"]["Macro_r"] = np.mean([scores[ent_type]["r"] for ent_type in relation_types])
+    # Compute micro F1 Scores, classes
+    class_tp = sum([class_scores[rel_type]["tp"] for rel_type in relation_types])
+    class_fp = sum([class_scores[rel_type]["fp"] for rel_type in relation_types])
+    class_fn = sum([class_scores[rel_type]["fn"] for rel_type in relation_types])
 
-    print(f"RE Evaluation in *** {mode.upper()} *** mode")
+    if class_tp:
+        class_precision = 100 * class_tp / (class_tp + class_fp)
+        class_recall = 100 * class_tp / (class_tp + class_fn)
+        class_f1 = 2 * class_precision * class_recall / (class_precision + class_recall)
 
+    else:
+        class_precision, class_recall, class_f1 = 0, 0, 0
+
+    class_scores["ALL"]["p"] = class_precision
+    class_scores["ALL"]["r"] = class_recall
+    class_scores["ALL"]["f1"] = class_f1
+    class_scores["ALL"]["tp"] = class_tp
+    class_scores["ALL"]["fp"] = class_fp
+    class_scores["ALL"]["fn"] = class_fn
+
+    # Compute Macro F1 Scores, relations
+    scores["ALL"]["Macro_f1"] = np.mean([scores[rel_type]["f1"] for rel_type in relation_types])
+    scores["ALL"]["Macro_p"] = np.mean([scores[rel_type]["p"] for rel_type in relation_types])
+    scores["ALL"]["Macro_r"] = np.mean([scores[rel_type]["r"] for rel_type in relation_types])
+
+    print(f"Full Triplet Evaluation")
     print(
-        "processed {} sentences with {} relations; found: {} relations; correct: {}.".format(n_sents, n_rels, n_found,
-                                                                                             tp))
+        "processed {} sentences with {} relations; found: {} relations; correct: {}.".format(n_sents, n_rels, n_found,tp))
     print(
         "\tALL\t TP: {};\tFP: {};\tFN: {}".format(
             scores["ALL"]["tp"],
@@ -703,10 +744,46 @@ def re_score(pred_relations, gt_relations, relation_types, mode="boundaries"):
             scores[rel_type]["r"],
             scores[rel_type]["f1"],
             scores[rel_type]["tp"] +
-            scores[rel_type][
-                "fp"]))
+            scores[rel_type]["fp"]))
 
-    return scores, precision, recall, f1
+    # Compute Macro F1 Scores, relations
+    class_scores["ALL"]["Macro_f1"] = np.mean([class_scores[rel_type]["f1"] for rel_type in relation_types])
+    class_scores["ALL"]["Macro_p"] = np.mean([class_scores[rel_type]["p"] for rel_type in relation_types])
+    class_scores["ALL"]["Macro_r"] = np.mean([class_scores[rel_type]["r"] for rel_type in relation_types])
+
+    print(f"Relation Classification Evaluation")
+
+    print(
+        "processed {} sentences with {} relations; found: {} relations; correct: {}.".format(n_sents, n_rels, n_found,class_tp))
+    print(
+        "\tALL\t TP: {};\tFP: {};\tFN: {}".format(
+            class_scores["ALL"]["tp"],
+            class_scores["ALL"]["fp"],
+            class_scores["ALL"]["fn"]))
+    print(
+        "\t\t(m avg): precision: {:.2f};\trecall: {:.2f};\tf1: {:.2f} (micro)".format(
+            class_precision,
+            class_recall,
+            class_f1))
+    print(
+        "\t\t(M avg): precision: {:.2f};\trecall: {:.2f};\tf1: {:.2f} (Macro)\n".format(
+            class_scores["ALL"]["Macro_p"],
+            class_scores["ALL"]["Macro_r"],
+            class_scores["ALL"]["Macro_f1"]))
+
+    for rel_type in relation_types:
+        print("\t{}: \tTP: {};\tFP: {};\tFN: {};\tprecision: {:.2f};\trecall: {:.2f};\tf1: {:.2f};\t{}".format(
+            rel_type,
+            class_scores[rel_type]["tp"],
+            class_scores[rel_type]["fp"],
+            class_scores[rel_type]["fn"],
+            class_scores[rel_type]["p"],
+            class_scores[rel_type]["r"],
+            class_scores[rel_type]["f1"],
+            class_scores[rel_type]["tp"] +
+            class_scores[rel_type]["fp"]))
+
+    return scores, precision, recall, f1, class_scores, class_precision, class_recall, class_f1
 
 #In[7]: Pytorch Trainer
 def train(conf):

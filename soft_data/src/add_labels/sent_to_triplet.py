@@ -27,7 +27,7 @@ def main():
         if matched != " ".join([]):
             found.append([line, matched])
 
-        if idx % 10000 == 0: print(f"dont with tagging line {idx} out of {len(read)}")
+        if idx % 10000 == 0: print(f"done with tagging line {idx} out of {len(read)}")
     
     df = pd.DataFrame(found, columns = ["text", "label"])
     df.to_csv(sys.argv[4])
@@ -251,17 +251,38 @@ def get_triples(sentence, verb_dict, spec_dict, spec_code, nlp):
                                 if chunk.root.head.idx == possible_verb.idx or chunk.root.head.head.idx == sub_idx:
                                     verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.dep_])
 
+                    elif possible_subject.dep == xcomp:   #subj / obj of composed verb should also be subj / obj of main verb
+                        sub_verb = possible_subject
+                        sub_idx = possible_subject.idx
+                        for chunk in doc.noun_chunks:
+                            #check if any words of the chunk are relevant entities 
+                            #if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
+                            if chunk.root.dep_ == "poss" or chunk.root.dep_ == "prep" or chunk.root.dep_ == "agent":
+                                if chunk.root.head.idx == possible_verb.idx or chunk.root.head.head.idx == sub_idx:
+                                    #print("verb xcomp, poss / prep", sentence)
+                                    verbs.append([possible_verb.idx, sub_verb.lemma_, chunk.text, chunk.root.dep_])
+
+                            else:
+                                if chunk.root.head.head.idx == sub_idx:
+                                    verbs.append([sub_idx, sub_verb.lemma_, chunk.text, chunk.root.dep_])
+                                    for index, verb in enumerate(verbs):
+                                        if verb[0] == possible_verb.head.idx:
+                                            verbs[index] = [sub_idx, sub_verb.lemma_, verb[2], verb[3]]
+
+
 
                 for chunk in doc.noun_chunks:       #for normal verbs, check chunks directly
                     #check if any words of the chunk are relevant entities 
                     #if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
-                    if chunk.root.head.dep_ == "poss" or chunk.root.head.dep_ == "prep":
+                    if chunk.root.head.dep_ == "poss" or chunk.root.head.dep_ == "prep" or chunk.root.dep_ == "agent":
                         if chunk.root.head.head.idx == possible_verb.idx:
                             verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.dep_])
 
                     else:
                         if chunk.root.head.idx == possible_verb.idx:
                             verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.dep_])
+
+
         elif possible_verb.pos == AUX:# or possible_verb.pos == VERB:
             for possible_subject in possible_verb.children: 
                 if possible_subject.dep == xcomp:   #subj / obj of composed verb should also be subj / obj of main verb
@@ -270,22 +291,30 @@ def get_triples(sentence, verb_dict, spec_dict, spec_code, nlp):
                     for chunk in doc.noun_chunks:
                         #check if any words of the chunk are relevant entities 
                         #if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
-                        if chunk.root.dep_ == "poss" or chunk.root.dep_ == "prep":
+                        if chunk.root.dep_ == "poss" or chunk.root.dep_ == "prep" or chunk.root.dep_ == "agent":
+                            print("verb xcomp, poss / prep", sentence)
                             if chunk.root.head.idx == possible_verb.idx or chunk.root.head.head.idx == sub_idx:
                                 verbs.append([possible_verb.idx, sub_verb.lemma_, chunk.text, chunk.root.dep_])
 
                         else:
-                            if chunk.root.head.idx == possible_verb.idx or chunk.root.head.head.idx == sub_idx:
-                                verbs.append([possible_verb.idx, sub_verb.lemma_, chunk.text, chunk.root.dep_])
+                            if chunk.root.head.idx == sub_idx:
+                                verbs.append([sub_idx, sub_verb.lemma_, chunk.text, chunk.root.dep_])
+                            elif chunk.root.head.head.idx == sub_idx:
+                                verbs.append([chunk.root.head.idx, chunk.root.head.head.lemma_, chunk.text, chunk.root.dep_])
+                                for index, verb in enumerate(verbs):
+                                    if verb[0] == sub_idx:
+                                        verbs[index] = [chunk.root.head.idx, chunk.root.head.head.lemma_, verb[2], verb[3]]
+
 
 
     #priority for subj-relation-obj triplets
-    mapper = {"nsubj":1,"dobj":2, "pobj":2, "iobj":2}
+    mapper = {"nsubj":1,"dobj":2, "pobj":3, "iobj":4, "appos": 5, "dative": 6, "nsubjpass" : 7} #maybe nsubjpass equivalent to nsubj?
 
     #create df from verbs extracted 
     df = pd.DataFrame(verbs, columns = ["idx", "verb", "noun", "noun_type"])
     df["noun_map"] = df.noun_type.map(mapper)  #turn noun_types into priority 
-
+    df = df.drop_duplicates()
+    df = df.sort_values(["idx","noun_map"])
     triples = []
     not_matched = []
     if df.shape[0] >= 2:
@@ -294,14 +323,16 @@ def get_triples(sentence, verb_dict, spec_dict, spec_code, nlp):
 
         matches = []
         for x in gb.groups:
-            group = gb.get_group(x).sort_values("noun_map")
+            group = gb.get_group(x).reset_index().sort_values("noun_map")
             if group.shape[0] == 2:
                 if group.noun_type.iloc[0] != group.noun_type.iloc[1]:
                     matches.append([group.iloc[0].noun, group.iloc[0].verb, group.iloc[1].noun])
             elif group.shape[0] > 2:
-                for i in range(group.shape[0] - 1):
-                    if group.noun_type.iloc[i] != group.noun_type.iloc[i+1]:
-                        matches.append([group.iloc[0].noun, group.iloc[0].verb, group.iloc[1].noun])
+                already_matched = ["nsubj"]
+                for i in range(1, group.shape[0]):
+                    if group.noun_type.iloc[i] not in already_matched:
+                        matches.append([group.iloc[0].noun, group.iloc[0].verb, group.iloc[i].noun])
+                        already_matched.append(group.noun_type.iloc[i])
     
 
         #turn matches into triples by only keeping those with coded verbs, return code instead of verb

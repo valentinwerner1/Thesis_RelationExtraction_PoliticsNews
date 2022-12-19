@@ -11,6 +11,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from typing import Any, Union, List, Optional, Sequence
 
 import re
+from gensim.parsing.preprocessing import strip_multiple_whitespaces
 
 import torch
 from torch.utils.data import DataLoader
@@ -65,15 +66,11 @@ cameo_to_penta = {
 #In[2]: Define dataset
 
 #for pretrain data
-data = pd.read_csv("soft_data/data/out_data/entail_articles_url_coref3.csv.done.csv", index_col = 0)
+data = pd.read_csv("soft_data/data/out_data/softdata_concat_noents.csv", index_col = 0)
 data = data.rename(columns = {"label":"triplets"})
-
-#only if using coref3 or earlier
-data["triplets"] = data.triplets.apply(lambda x: x.replace("Intend", "Express Intend to Cooperate"))
 
 if sys.argv[1] == "pentacode":
     penta_map = []
-    last_txt = ""
     for row in data.iterrows():
         trip_text = row[1]["triplets"]
         for key in cameo_to_penta.keys():
@@ -82,27 +79,14 @@ if sys.argv[1] == "pentacode":
     data = pd.DataFrame(penta_map, columns = ["text","triplets"])
     print("initialized Pentacode data")
 
-    penta_opts = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
-    #extract the categorized relation for stratified split on pentacode
-    relation = []
-    for row in data.iterrows():
-        sub_rels = []
-        for opt in penta_opts:
-            for count in range(row[1]["triplets"].count(opt)):
-                sub_rels.append(opt)
-        relation.append(sub_rels)
-    data["relations"] = relation  
-
-else: 
-    #extract the categorized relation for stratified split on cameo codes
-    relation = []
-    for row in data.iterrows():
-        sub_rels = []
-        for cameo in cameo_to_penta.keys():
-            for count in range(row[1]["triplets"].count(cameo)):
-                sub_rels.append(cameo)
-        relation.append(sub_rels)
-    data["relations"] = relation      
+#extract the categorized relation for stratified split on pentacode
+data["triplets"] = data.triplets.apply(lambda x: strip_multiple_whitespaces(x.replace("<triplet>"," <triplet> "))) #avoid badly formatted triplets
+relation = []
+for row in data.iterrows():
+    rel_iter = row[1]["triplets"] + " <triplet>"
+    all_rels = re.findall("(?<=<obj> ).*?(?= <triplet>)", rel_iter)
+    relation.append(all_rels)
+data["relations"] = relation    
 
 #create stratified splits
 mlb = MultiLabelBinarizer()
@@ -140,11 +124,11 @@ data_dict = {
 class conf:
     #general
     seed = 0
-    gpus = 1 #more?
+    gpus = [2] #1 for any one GPU; [2] for choosing GPU#2
     ontology = sys.argv[1] #cameo or pentacode
     
     #input
-    batch_size = 16
+    batch_size = 32
     max_length = 128
     ignore_pad_token_for_loss = True
     use_fast_tokenizer = True
@@ -159,7 +143,7 @@ class conf:
     beta1 = 0.9
     beta2 = 0.999
     epsilon = 0.00000001
-    warm_up = 2 #num of epochs to warm_up on
+    warm_up = 1 #num of epochs to warm_up on
 
     #training
     monitor_var  = "val_F1_micro"
@@ -366,54 +350,66 @@ class BaseModule(pl.LightningModule):
     def training_epoch_end(self, output: dict):
         
         print("\n\n train eval\n")
-        if self.ontology == "pentacode":
-            relations = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
-        else:
-            relations = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
         
-        scores, precision, recall, f1, class_scores, class_precision, class_recall, class_f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
+        scores, class_scores= re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']])
 
-        self.log('train_prec_micro', precision)
-        self.log('train_recall_micro', recall)
-        self.log('train_F1_micro', f1)
+        self.log('train_prec_micro', scores["ALL"]["p"]) 
+        self.log('train_recall_micro', scores["ALL"]["r"])
+        self.log('train_F1_micro', scores["ALL"]["f1"])
 
-        self.log('train_prec_micro_class', class_precision)
-        self.log('train_recall_micro_class', class_recall)
-        self.log('train_F1_micro_class', class_f1)
+        self.log("train_prec_macro", scores["ALL"]["Macro_p"])
+        self.log("train_recall_macro", scores["ALL"]["Macro_r"])
+        self.log("train_F1_macro", scores["ALL"]["Macro_f1"])
+
+        self.log('train_prec_micro_class', class_scores["ALL"]["p"])
+        self.log('train_recall_micro_class', class_scores["ALL"]["r"])
+        self.log('train_F1_micro_class', class_scores["ALL"]["f1"])
+
+        self.log("train_prec_macro_class", class_scores["ALL"]["Macro_p"])
+        self.log("train_recall_macro_class", class_scores["ALL"]["Macro_r"])
+        self.log("train_F1_macro_class", class_scores["ALL"]["Macro_f1"])
 
     def validation_epoch_end(self, output: dict):
 
         print("\n\n validation eval\n")
-        if self.ontology == "pentacode":
-            relations = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
-        else:
-            relations = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
+       
+        scores, class_scores = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']])
         
-        scores, precision, recall, f1, class_scores, class_precision, class_recall, class_f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
-        self.log('val_prec_micro', precision)
-        self.log('val_recall_micro', recall)
-        self.log('val_F1_micro', f1)
+        self.log('train_prec_micro', scores["ALL"]["p"]) 
+        self.log('train_recall_micro', scores["ALL"]["r"])
+        self.log('train_F1_micro', scores["ALL"]["f1"])
 
-        self.log('val_prec_micro_class', class_precision)
-        self.log('val_recall_micro_class', class_recall)
-        self.log('val_F1_micro_class', class_f1)
+        self.log("train_prec_macro", scores["ALL"]["Macro_p"])
+        self.log("train_recall_macro", scores["ALL"]["Macro_r"])
+        self.log("train_F1_macro", scores["ALL"]["Macro_f1"])
+
+        self.log('train_prec_micro_class', class_scores["ALL"]["p"])
+        self.log('train_recall_micro_class', class_scores["ALL"]["r"])
+        self.log('train_F1_micro_class', class_scores["ALL"]["f1"])
+
+        self.log("train_prec_macro_class", class_scores["ALL"]["Macro_p"])
+        self.log("train_recall_macro_class", class_scores["ALL"]["Macro_r"])
+        self.log("train_F1_macro_class", class_scores["ALL"]["Macro_f1"])
 
     def test_epoch_end(self, output: dict):
+       
+        scores, class_scores = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']])
 
-        if self.ontology == "pentacode":
-            relations = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
-        else:
-            relations = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
-        
-        scores, precision, recall, f1, class_scores, class_precision, class_recall, class_f1 = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']], relations)
-        self.log('test_prec_micro', precision)
-        self.log('test_recall_micro', recall)
-        self.log('test_F1_micro', f1)
+        self.log('train_prec_micro', scores["ALL"]["p"]) 
+        self.log('train_recall_micro', scores["ALL"]["r"])
+        self.log('train_F1_micro', scores["ALL"]["f1"])
 
-        self.log('test_prec_micro_class', class_precision)
-        self.log('test_recall_micro_class', class_recall)
-        self.log('test_F1_micro_class', class_f1)
+        self.log("train_prec_macro", scores["ALL"]["Macro_p"])
+        self.log("train_recall_macro", scores["ALL"]["Macro_r"])
+        self.log("train_F1_macro", scores["ALL"]["Macro_f1"])
 
+        self.log('train_prec_micro_class', class_scores["ALL"]["p"])
+        self.log('train_recall_micro_class', class_scores["ALL"]["r"])
+        self.log('train_F1_micro_class', class_scores["ALL"]["f1"])
+
+        self.log("train_prec_macro_class", class_scores["ALL"]["Macro_p"])
+        self.log("train_recall_macro_class", class_scores["ALL"]["Macro_r"])
+        self.log("train_F1_macro_class", class_scores["ALL"]["Macro_f1"])
 
     # additional functions called in main functions
 
@@ -600,7 +596,7 @@ def extract_triplets(text):
 
 #from REBEL
 '''Adapted from: https://github.com/btaille/sincere/blob/6f5472c5aeaf7ef7765edf597ede48fdf1071712/code/utils/evaluation.py'''
-def re_score(pred_relations, gt_relations, relation_types):
+def re_score(pred_relations, gt_relations):
     """Evaluate RE predictions
     Args:
         pred_relations (list) :  list of list of predicted relations (several relations in each sentence)
@@ -616,7 +612,9 @@ def re_score(pred_relations, gt_relations, relation_types):
     if conf.ontology == "pentacode":
         relation_types = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
     else:
-        relation_types = ["MakePublicStatement","Appeal","ExpressIntendToCooperate","Consult","EngageInDiplomaticCooperation","EngageInMaterialCooperation","ProvideAid","Yield","Investigate","Demand","Disapprove","Reject","Threaten","ExhibitMilitaryPosture","Protest","ReduceRelations","Coerce","Assault","Fight","EngageInUnconventialMassViolence"]
+        relation_types = ["Make Public Statement","Appeal","Express Intend To Cooperate","Consult","Engage In Diplomatic Cooperation",
+        "Engage In Material Cooperation","Provide Aid","Yield","Investigate","Demand","Disapprove","Reject",
+        "Threaten","Exhibit Military Posture","Protest","Reduce Relations","Coerce","Assault","Fight","Engage In Unconvential Mass Violence"]
       
     scores = {rel: {"tp": 0, "fp": 0, "fn": 0} for rel in relation_types + ["ALL"]}
     class_scores = {rel: {"tp": 0, "fp": 0, "fn": 0} for rel in relation_types + ["ALL"]}
@@ -783,7 +781,7 @@ def re_score(pred_relations, gt_relations, relation_types):
             class_scores[rel_type]["tp"] +
             class_scores[rel_type]["fp"]))
 
-    return scores, precision, recall, f1, class_scores, class_precision, class_recall, class_f1
+    return scores, class_scores
 
 #In[7]: Pytorch Trainer
 def train(conf):

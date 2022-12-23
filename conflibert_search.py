@@ -63,8 +63,9 @@ cameo_to_penta = {
     "Engage in unconventional mass violence" : "Material Conflict"
 }
 
-
 #In[2]: Define dataset
+
+conf = None
 
 #for pretrain data
 data = pd.read_csv("soft_data/data/out_data/softdata_concat_noents.csv", index_col = 0)
@@ -93,7 +94,6 @@ if sys.argv[1] != "pentacode":
     idx = []
     for row in data.iterrows():
         if "Engage In Unconventional Mass Violence" in row[1]["relations"]: idx.append(row[0])
-        #elif "Exhibit Military Posture" in row[1]["relations"]: idx.append(row[0])
     #Drop unconventional mass violence because not represented 
     data = data.drop(index = idx).reset_index().drop(columns = ["index"])
 
@@ -132,53 +132,31 @@ data_dict = {
     "test": test
 }
 
-#In[3]: Define config
+#In[3]: Define config for Random Search
 
-class conf:
-    #general
-    seed = 0
-    gpus = [0] #1 for any one GPU; [1] for choosing GPU#1
-    ontology = sys.argv[1] #cameo or pentacode
+sweep_config = {
+    'method': 'random'
+    }
+
+metric = {
+    'name': 'val_loss',
+    'goal': 'minimize'   
+    }
+
+parameters_dict = {
+    'optimizer': {'values': ['adam', 'sgd']},
+    'batch_size': {'values': [32, 64]},
+    'lr': {'values': [0.00005, 0.000075, 0.0001, 0.000125]},#[0.00001, 0.000025, 0.00005, 0.000075, 0.0001]},
+    "lr_decay" : {"values":[0.2, 0.3, 0.35]},#[0.1, 0.2, 0.3]},
+    "eps_loss" : {"values": [0.1, 0.15, 0.2]},#[0.05, 0.1, 0.15]},
+    "weight_decay" : {"values" : [0.005, 0.01, 0.015]},
+    }
     
-    #input
-    batch_size = 32
-    max_length = 128
-    ignore_pad_token_for_loss = True
-    use_fast_tokenizer = True
-    gradient_acc_steps = 1
-    gradient_clip_value = 10.0
-    load_workers = 50 #50 is 5/8 of plato
-    masking = 1 #after how many epoch should new masking be applied, 0 = no masking
+sweep_config['parameters'] = parameters_dict
 
-    #optimizer
-    lr = 0.0001
-    lr_decay = 0.3
-    weight_decay = 0.01
-    beta1 = 0.9
-    beta2 = 0.999
-    epsilon = 0.00000001
-    eps_loss = 0.15 #for label smoothed loss
-    warm_up = 1 #num of epochs to warm_up on
+sweep_id = wandb.sweep(sweep_config, project="ConfliBERT_hparams")
 
-    #training
-    monitor_var  = "val_F1_micro"
-    monitor_var_mode = "max"
-    samples_interval = 100
-    # val_check_interval = 0.5
-    # val_percent_check = 0.1
-
-    model_name = "model1.pth"
-    checkpoint_path = f"models/{model_name}"
-    save_top_k = 1
-
-    early_stopping = False
-    patience = 10
-
-    length_penalty = 0
-    no_repeat_ngram_size = 0
-    num_beams = 3
-    precision = 16 
-    amp_level = None
+sweep_config['metric'] = metric
 
 #In[5]: Pytorch Lightning DataModule
 
@@ -188,6 +166,7 @@ class GetData(pl.LightningDataModule):
         super().__init__()
         self.tokenizer = tokenizer
         self.model = model
+        self.conf = conf
         self.datasets = data_dict
         
         # Data collator
@@ -201,11 +180,11 @@ class GetData(pl.LightningDataModule):
         outputs = data["triplets"]
 
         #process input
-        model_inputs = self.tokenizer(inputs, max_length = conf.max_length, padding = True, truncation = True)
+        model_inputs = self.tokenizer(inputs, max_length = 128, padding = True, truncation = True)
 
         #process labels
         with self.tokenizer.as_target_tokenizer():
-            labels = self.tokenizer(outputs, max_length = conf.max_length, padding = True, truncation = True)
+            labels = self.tokenizer(outputs, max_length = 128, padding = True, truncation = True)
 
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
@@ -220,7 +199,7 @@ class GetData(pl.LightningDataModule):
                     sub = split[i*3:i*3+3]
                     subj = sub[0]
                     obj = sub[1]             
-                    if np.random.binomial(1, 0.25, 1) == 1:                  
+                    if np.random.binomial(1, 0.15, 1) == 1:                  
                         tok = np.random.choice(sub).rstrip().lstrip()               
                         new.append([row[1]["text"].replace(tok, "<MASK>"), row[1]["triplets"].replace(tok, "<MASK>")])                    
                         break
@@ -237,24 +216,21 @@ class GetData(pl.LightningDataModule):
     #apply the preprocessing and load data
     def train_dataloader(self, *args, **kwargs): 
         self.train_dataset = self.datasets["train"]
-        if conf.masking != 0:
-            self.train_dataset = self.apply_mask(self.train_dataset)
+        self.train_dataset = self.apply_mask(self.train_dataset)
         self.train_dataset = self.train_dataset.map(self.preprocess_function, remove_columns = ["text", "triplets"], batched = True)
-        return DataLoader(self.train_dataset, batch_size = conf.batch_size, collate_fn = self.data_collator, shuffle = True, num_workers= conf.load_workers)
+        return DataLoader(self.train_dataset, batch_size = self.conf.batch_size, collate_fn = self.data_collator, shuffle = True, num_workers= 50)
     
     def val_dataloader(self, *args, **kwargs): 
         self.eval_dataset = self.datasets["val"]
-        if conf.masking != 0:
-            self.eval_dataset = self.apply_mask(self.eval_dataset)
+        self.eval_dataset = self.apply_mask(self.eval_dataset)
         self.eval_dataset = self.eval_dataset.map(self.preprocess_function, remove_columns = ["text", "triplets"], batched = True)
-        return DataLoader(self.eval_dataset, batch_size = conf.batch_size, collate_fn = self.data_collator, num_workers= conf.load_workers)
+        return DataLoader(self.eval_dataset, batch_size = self.conf.batch_size, collate_fn = self.data_collator, num_workers= 50)
 
     def test_dataloader(self, *args, **kwargs): 
         self.test_dataset = self.datasets["test"]
-        if conf.masking != 0:
-            self.test_dataset = self.apply_mask(self.test_dataset)
+        self.test_dataset = self.apply_mask(self.test_dataset)
         self.test_dataset = self.test_dataset.map(self.preprocess_function,  remove_columns = ["text", "triplets"], batched = True)
-        return DataLoader(self.test_dataset, batch_size = conf.batch_size, collate_fn = self.data_collator, num_workers= conf.load_workers)
+        return DataLoader(self.test_dataset, batch_size = self.conf.batch_size, collate_fn = self.data_collator, num_workers= 50)
 
 #In[6]: Pytorch Lightning Base module
 
@@ -263,13 +239,14 @@ class BaseModule(pl.LightningModule):
     def __init__(self, conf, config: AutoConfig, tokenizer: AutoTokenizer, model: AutoModelForSeq2SeqLM):
         super().__init__()
         self.config = config
+        self.conf = conf
         self.model = model
         self.tokenizer = tokenizer
-        self.ontology = conf.ontology
+        self.ontology = sys.argv[1]
         self.eps_loss = conf.eps_loss
         self.loss_fn = label_smoothed_nll_loss 
         #self.loss_fn = torch.nn.CrossEntropyLoss(ignore_index=-100)
-        self.num_beams = conf.num_beams
+        self.num_beams = 3
 
     def forward(self, inputs, labels, *args):
         ##### Check later if smooth labeled loss is better 
@@ -289,8 +266,8 @@ class BaseModule(pl.LightningModule):
         batch["labels"] = labels_original
 
         forward_output['tr_loss'] = forward_output['loss'].mean().detach()
-        if labels.shape[-1] < conf.max_length:
-            forward_output['labels'] = self._pad_tensors_to_max_len(labels, conf.max_length)
+        if labels.shape[-1] < 128:
+            forward_output['labels'] = self._pad_tensors_to_max_len(labels, 128)
         else:
             forward_output['labels'] = labels
         
@@ -313,8 +290,8 @@ class BaseModule(pl.LightningModule):
         forward_output['loss'] = forward_output['loss'].mean().detach()
         forward_output['logits'] = forward_output['logits'].detach()
 
-        if labels.shape[-1] < conf.max_length:
-            forward_output['labels'] = self._pad_tensors_to_max_len(labels, conf.max_length)
+        if labels.shape[-1] < 128:
+            forward_output['labels'] = self._pad_tensors_to_max_len(labels, 128)
         else:
             forward_output['labels'] = labels
 
@@ -343,8 +320,8 @@ class BaseModule(pl.LightningModule):
 
         forward_output['logits'] = forward_output['logits'].detach()
 
-        if labels.shape[-1] < conf.max_length:
-            forward_output['labels'] = self._pad_tensors_to_max_len(labels, conf.max_length)
+        if labels.shape[-1] < 128:
+            forward_output['labels'] = self._pad_tensors_to_max_len(labels, 128)
         else:
             forward_output['labels'] = labels
 
@@ -436,8 +413,8 @@ class BaseModule(pl.LightningModule):
         generated_tokens = self.model.generate(
             batch["input_ids"].to(self.model.device),
             attention_mask=batch["attention_mask"].to(self.model.device),
-            use_cache = True, max_length = conf.max_length, early_stopping = conf.early_stopping, length_penalty = conf.length_penalty, 
-            no_repeat_ngram_size = conf.no_repeat_ngram_size, num_beams = conf.num_beams)
+            use_cache = True, max_length = 128, early_stopping = False, length_penalty = 0, 
+            no_repeat_ngram_size = 0, num_beams = 3)
 
         decoded_preds = self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=False)
         decoded_labels = self.tokenizer.batch_decode(torch.where(labels != -100, labels, self.config.pad_token_id), skip_special_tokens=False)
@@ -466,7 +443,7 @@ class BaseModule(pl.LightningModule):
         optimizer_grouped_parameters = [
             {
                 "params": [p for n, p in self.model.named_parameters() if not any(nd in n for nd in no_decay)],
-                "weight_decay": conf.weight_decay,
+                "weight_decay": self.conf.weight_decay,
             },
             {
                 "params": [p for n, p in self.model.named_parameters() if any(nd in n for nd in no_decay)],
@@ -474,11 +451,12 @@ class BaseModule(pl.LightningModule):
             },
         ]
         
-        optimizer = AdamW(optimizer_grouped_parameters, lr = conf.lr, betas = (conf.beta1, conf.beta2), eps = conf.epsilon, weight_decay = conf.weight_decay)
+
+        optimizer = AdamW(optimizer_grouped_parameters, lr = self.conf.lr, betas = (0.9, 0.999), eps = 0.00000001, weight_decay = self.conf.weight_decay)
 
         def lr_schedule(epoch):
-            k = conf.lr_decay
-            if epoch < conf.warm_up: lr_scale =  0.1
+            k = self.conf.lr_decay
+            if epoch < 1: lr_scale =  0.1
             else: lr_scale = 1 * math.exp(-k*epoch)
             return lr_scale
 
@@ -496,7 +474,7 @@ class BaseModule(pl.LightningModule):
 #FROM https://github.com/facebookresearch/fairseq/blob/main/fairseq/criterions/label_smoothed_cross_entropy.py
 def label_smoothed_nll_loss(lprobs, target, ignore_index=-100):
     """From fairseq"""
-    eps_loss = conf.eps_loss
+    eps_loss = self.conf.eps_loss
     if target.dim() == lprobs.dim() - 1:
         target = target.unsqueeze(-1)
     nll_loss = -lprobs.gather(dim=-1, index=target)
@@ -534,10 +512,10 @@ class GenerateTextSamplesCallback(Callback):
         # pl_module.logger.info("Executing translation callback")
         labels = batch.pop("labels")
         gen_kwargs = {
-            "max_length": conf.max_length,
+            "max_length": 128,
             "early_stopping": False,
             "no_repeat_ngram_size": 0,
-            "num_beams": conf.num_beams
+            "num_beams": 3
         }
         pl_module.eval()
 
@@ -629,13 +607,13 @@ def re_score(pred_relations, gt_relations):
         vocab (Vocab) :         dataset vocabulary
         mode (str) :            in 'strict' or 'boundaries' """
 
-    if conf.ontology == "pentacode":
+    if sys.argv[1] == "pentacode":
         relation_types = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
     else:
         relation_types = ["make public statement","appeal","express intend to cooperate","consult","engage in diplomatic cooperation",
         "engage in material cooperation","provide aid","yield","investigate","demand","disapprove",
         "reject","threaten","exhibit military posture","protest","reduce relations","coerce",
-        "assault","fight","engage in unconvential mass violence"]
+        "assault","fight"]#"engage in unconvential mass violence"]
       
     scores = {rel: {"tp": 0, "fp": 0, "fn": 0} for rel in relation_types + ["ALL"]}
     class_scores = {rel: {"tp": 0, "fp": 0, "fn": 0} for rel in relation_types + ["ALL"]}
@@ -804,71 +782,58 @@ def re_score(pred_relations, gt_relations):
 
     return scores, class_scores
 
+
 #In[7]: Pytorch Trainer
-def train(conf):
-    pl.seed_everything(conf.seed)
+def train(conf=None):
 
-    add_tokens = ["<obj>", "<subj>", "<triplet>", "<head>", "</head>", "<tail>", "</tail>", "<MASK>"]
-    tokenizer = transformers.AutoTokenizer.from_pretrained("snowood1/ConfliBERT-scr-uncased", use_fast = conf.use_fast_tokenizer,
-            additional_special_tokens = add_tokens)
-    model = transformers.EncoderDecoderModel.from_encoder_decoder_pretrained("snowood1/ConfliBERT-scr-uncased","snowood1/ConfliBERT-scr-uncased", tie_encoder_decoder = True)
+    with wandb.init(config=conf):
+        conf = wandb.config
 
-    config = model.config
-    config.decoder_start_token_id = tokenizer.cls_token_id
-    config.eos_token_id = tokenizer.sep_token_id
-    config.pad_token_id = tokenizer.pad_token_id
-    config.vocab_size = config.encoder.vocab_size
+        pl.seed_everything(0)
 
-    model.encoder.resize_token_embeddings(len(tokenizer))
-    model.decoder.resize_token_embeddings(len(tokenizer))
+        add_tokens = ["<obj>", "<subj>", "<triplet>", "<head>", "</head>", "<tail>", "</tail>", "<MASK>"]
+        tokenizer = transformers.AutoTokenizer.from_pretrained("snowood1/ConfliBERT-scr-uncased", use_fast = True,
+                additional_special_tokens = add_tokens)
+        model = transformers.EncoderDecoderModel.from_encoder_decoder_pretrained("snowood1/ConfliBERT-scr-uncased","snowood1/ConfliBERT-scr-uncased", tie_encoder_decoder = True)
 
-    pl_data_module = GetData(conf, tokenizer, model)
-    pl_module = BaseModule(conf, config, tokenizer, model)
 
-    wandb_logger = WandbLogger(project = "project/ConfliBERT".split('/')[-1].replace('.py', ''), name = "ConfliBERT")
+        config = model.config
+        config.decoder_start_token_id = tokenizer.cls_token_id
+        config.eos_token_id = tokenizer.sep_token_id
+        config.pad_token_id = tokenizer.pad_token_id
+        config.vocab_size = config.encoder.vocab_size
 
-    callbacks_store = []
+        model.encoder.resize_token_embeddings(len(tokenizer))
+        model.decoder.resize_token_embeddings(len(tokenizer))
 
-    if conf.early_stopping:
-        callbacks_store.append(
-            EarlyStopping(
-                monitor=conf.monitor_var,
-                mode=conf.monitor_var_mode,
-                patience=conf.patience
-            )
+        pl_data_module = GetData(conf, tokenizer, model)
+        pl_module = BaseModule(conf, config, tokenizer, model)
+
+        wandb_logger = WandbLogger(project = "project/ConfliBERT".split('/')[-1].replace('.py', ''), name = "ConfliBERT", log_model = False)
+
+        callbacks_store = []
+
+        callbacks_store.append(GenerateTextSamplesCallback(100))
+        callbacks_store.append(LearningRateMonitor(logging_interval='step'))
+
+        trainer = pl.Trainer(
+            accelerator = "gpu",
+            devices = [1],
+            accumulate_grad_batches=1,
+            gradient_clip_val=10,
+            max_epochs = 10,
+            min_epochs = 5,
+            callbacks=callbacks_store,
+            reload_dataloaders_every_n_epochs = 1, 
+            precision=16,
+            amp_level=None,
+            logger=wandb_logger,
         )
 
-    # callbacks_store.append(ModelCheckpoint(dirpath="checkpoints/", 
-    #                                     filename="{epoch}-{val_F1_micro:.2f}", 
-    #                                     monitor="val_F1_micro", 
-    #                                     verbose=True, 
-    #                                     save_top_k=1, 
-    #                                     mode='max', 
-    #                                     every_n_epochs=1))
-
-    callbacks_store.append(GenerateTextSamplesCallback(conf.samples_interval))
-    callbacks_store.append(LearningRateMonitor(logging_interval='step'))
-
-    trainer = pl.Trainer(
-        accelerator = "gpu",
-        devices = conf.gpus,
-        accumulate_grad_batches=conf.gradient_acc_steps,
-        gradient_clip_val=conf.gradient_clip_value,
-        max_epochs = 30,
-        min_epochs = 5,
-        callbacks=callbacks_store,
-        reload_dataloaders_every_n_epochs = conf.masking, 
-        precision=conf.precision,
-        amp_level=conf.amp_level,
-        logger=wandb_logger,
-    )
-
-    trainer.fit(pl_module, datamodule=pl_data_module)
-
-    trainer.test(pl_module, datamodule=pl_data_module)
+        trainer.fit(pl_module, datamodule=pl_data_module)
 
 
-#In[8]: train model
+#In[9]: train model
 
-train(conf)
+wandb.agent(sweep_id, train, count=10)
 #api key is fcfb005aa20d2c3af3389e0a2a6d58a829bfd2ee

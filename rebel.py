@@ -88,6 +88,14 @@ for row in data.iterrows():
     relation.append(all_rels)
 data["relations"] = relation    
 
+if sys.argv[1] != "pentacode":
+    idx = []
+    for row in data.iterrows():
+        if "Engage In Unconventional Mass Violence" in row[1]["relations"]: idx.append(row[0])
+        #elif "Exhibit Military Posture" in row[1]["relations"]: idx.append(row[0])
+    #Drop unconventional mass violence because not represented 
+    data = data.drop(index = idx).reset_index().drop(columns = ["index"])
+
 #create stratified splits
 mlb = MultiLabelBinarizer()
 accept_MLB = mlb.fit_transform(data["relations"])
@@ -128,7 +136,7 @@ class conf:
     ontology = sys.argv[1] #cameo or pentacode
     
     #input
-    batch_size = 32
+    batch_size = 64
     max_length = 128
     ignore_pad_token_for_loss = True
     use_fast_tokenizer = True
@@ -139,6 +147,7 @@ class conf:
 
     #optimizer
     lr = 0.00005
+    lr_decay = 0.125
     weight_decay = 0.01
     beta1 = 0.9
     beta2 = 0.999
@@ -205,7 +214,7 @@ class GetData(pl.LightningDataModule):
                     sub = split[i*3:i*3+3]
                     subj = sub[0]
                     obj = sub[1]             
-                    if np.random.binomial(1, 0.15, 1) == 1:                  
+                    if np.random.binomial(1, 0.25, 1) == 1:                  
                         tok = np.random.choice(sub).rstrip().lstrip()               
                         new.append([row[1]["text"].replace(tok, "<MASK>"), row[1]["triplets"].replace(tok, "<MASK>")])                    
                         break
@@ -375,41 +384,41 @@ class BaseModule(pl.LightningModule):
        
         scores, class_scores = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']])
         
-        self.log('train_prec_micro', scores["ALL"]["p"]) 
-        self.log('train_recall_micro', scores["ALL"]["r"])
-        self.log('train_F1_micro', scores["ALL"]["f1"])
+        self.log('val_prec_micro', scores["ALL"]["p"]) 
+        self.log('val_recall_micro', scores["ALL"]["r"])
+        self.log('val_F1_micro', scores["ALL"]["f1"])
 
-        self.log("train_prec_macro", scores["ALL"]["Macro_p"])
-        self.log("train_recall_macro", scores["ALL"]["Macro_r"])
-        self.log("train_F1_macro", scores["ALL"]["Macro_f1"])
+        self.log("val_prec_macro", scores["ALL"]["Macro_p"])
+        self.log("val_recall_macro", scores["ALL"]["Macro_r"])
+        self.log("val_F1_macro", scores["ALL"]["Macro_f1"])
 
-        self.log('train_prec_micro_class', class_scores["ALL"]["p"])
-        self.log('train_recall_micro_class', class_scores["ALL"]["r"])
-        self.log('train_F1_micro_class', class_scores["ALL"]["f1"])
+        self.log('val_prec_micro_class', class_scores["ALL"]["p"])
+        self.log('val_recall_micro_class', class_scores["ALL"]["r"])
+        self.log('val_F1_micro_class', class_scores["ALL"]["f1"])
 
-        self.log("train_prec_macro_class", class_scores["ALL"]["Macro_p"])
-        self.log("train_recall_macro_class", class_scores["ALL"]["Macro_r"])
-        self.log("train_F1_macro_class", class_scores["ALL"]["Macro_f1"])
+        self.log("val_prec_macro_class", class_scores["ALL"]["Macro_p"])
+        self.log("val_recall_macro_class", class_scores["ALL"]["Macro_r"])
+        self.log("val_F1_macro_class", class_scores["ALL"]["Macro_f1"])
 
     def test_epoch_end(self, output: dict):
        
         scores, class_scores = re_score([item for pred in output for item in pred['predictions']], [item for pred in output for item in pred['labels']])
 
-        self.log('train_prec_micro', scores["ALL"]["p"]) 
-        self.log('train_recall_micro', scores["ALL"]["r"])
-        self.log('train_F1_micro', scores["ALL"]["f1"])
+        self.log('test_prec_micro', scores["ALL"]["p"]) 
+        self.log('test_recall_micro', scores["ALL"]["r"])
+        self.log('test_F1_micro', scores["ALL"]["f1"])
 
-        self.log("train_prec_macro", scores["ALL"]["Macro_p"])
-        self.log("train_recall_macro", scores["ALL"]["Macro_r"])
-        self.log("train_F1_macro", scores["ALL"]["Macro_f1"])
+        self.log("test_prec_macro", scores["ALL"]["Macro_p"])
+        self.log("test_recall_macro", scores["ALL"]["Macro_r"])
+        self.log("test_F1_macro", scores["ALL"]["Macro_f1"])
 
-        self.log('train_prec_micro_class', class_scores["ALL"]["p"])
-        self.log('train_recall_micro_class', class_scores["ALL"]["r"])
-        self.log('train_F1_micro_class', class_scores["ALL"]["f1"])
+        self.log('test_prec_micro_class', class_scores["ALL"]["p"])
+        self.log('test_recall_micro_class', class_scores["ALL"]["r"])
+        self.log('test_F1_micro_class', class_scores["ALL"]["f1"])
 
-        self.log("train_prec_macro_class", class_scores["ALL"]["Macro_p"])
-        self.log("train_recall_macro_class", class_scores["ALL"]["Macro_r"])
-        self.log("train_F1_macro_class", class_scores["ALL"]["Macro_f1"])
+        self.log("test_prec_macro_class", class_scores["ALL"]["Macro_p"])
+        self.log("test_recall_macro_class", class_scores["ALL"]["Macro_r"])
+        self.log("test_F1_macro_class", class_scores["ALL"]["Macro_f1"])
 
     # additional functions called in main functions
 
@@ -475,8 +484,9 @@ class BaseModule(pl.LightningModule):
 #In[7]: Helper functions
 
 #from REBEL
-def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
+def label_smoothed_nll_loss(lprobs, target, ignore_index=-100):
     """From fairseq"""
+    eps_loss = conf.eps_loss
     if target.dim() == lprobs.dim() - 1:
         target = target.unsqueeze(-1)
     nll_loss = -lprobs.gather(dim=-1, index=target)
@@ -491,8 +501,8 @@ def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
 
     nll_loss = nll_loss.sum()  
     smooth_loss = smooth_loss.sum()
-    eps_i = epsilon / lprobs.size(-1)
-    loss = (1.0 - epsilon) * nll_loss + eps_i * smooth_loss
+    eps_i = eps_loss / lprobs.size(-1)
+    loss = (1.0 - eps_loss) * nll_loss + eps_i * smooth_loss
     return loss, nll_loss
 
 #from REBEL

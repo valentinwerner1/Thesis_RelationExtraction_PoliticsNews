@@ -3,6 +3,7 @@
 
 import pandas as pd
 import numpy as np
+import math
 import json
 import os
 import sys
@@ -80,13 +81,13 @@ if sys.argv[1] == "pentacode":
     print("initialized Pentacode data")
 
 #extract the categorized relation for stratified split on pentacode
-data["triplets"] = data.triplets.apply(lambda x: strip_multiple_whitespaces(x.replace("<triplet>"," <triplet> "))) #avoid badly formatted triplets
+data["triplets"] = data.triplets.apply(lambda x: strip_multiple_whitespaces(x.replace("<triplet>"," <triplet> ")))
 relation = []
 for row in data.iterrows():
     rel_iter = row[1]["triplets"] + " <triplet>"
     all_rels = re.findall("(?<=<obj> ).*?(?= <triplet>)", rel_iter)
     relation.append(all_rels)
-data["relations"] = relation    
+data["relations"] = relation 
 
 if sys.argv[1] != "pentacode":
     idx = []
@@ -108,6 +109,10 @@ splits = MultilabelStratifiedShuffleSplit(test_size=round(len(data.text) * 0.85)
 val_idx, train_idx = next(splits.split(data.text, data[cols]))
 
 train = data.iloc[train_idx][["text", "triplets"]]
+#duplicate data to see if more data helps
+# tr_2 = pd.concat([train,train])
+# tr_3 = pd.concat([tr_2, tr_2])
+# tr_4 = pd.concat([tr_3, tr_3])
 pre_split = data.iloc[val_idx]
 
 #select indexes test & val
@@ -132,11 +137,11 @@ data_dict = {
 class conf:
     #general
     seed = 0
-    gpus = [2] #1 for any one GPU; [2] for choosing GPU#2
+    gpus = [0] #1 for any one GPU; [1] for choosing GPU#1
     ontology = sys.argv[1] #cameo or pentacode
     
     #input
-    batch_size = 64
+    batch_size = 32
     max_length = 128
     ignore_pad_token_for_loss = True
     use_fast_tokenizer = True
@@ -146,12 +151,13 @@ class conf:
     masking = 1 #after how many epoch should new masking be applied, 0 = no masking
 
     #optimizer
-    lr = 0.00005
-    lr_decay = 0.125
-    weight_decay = 0.01
+    lr = 0.0001
+    lr_decay = 0.2
+    weight_decay = 0.005
     beta1 = 0.9
     beta2 = 0.999
     epsilon = 0.00000001
+    eps_loss = 0.15 #for label smoothed loss
     warm_up = 1 #num of epochs to warm_up on
 
     #training
@@ -165,7 +171,7 @@ class conf:
     checkpoint_path = f"models/{model_name}"
     save_top_k = 1
 
-    early_stopping = True
+    early_stopping = False
     patience = 10
 
     length_penalty = 0
@@ -214,7 +220,7 @@ class GetData(pl.LightningDataModule):
                     sub = split[i*3:i*3+3]
                     subj = sub[0]
                     obj = sub[1]             
-                    if np.random.binomial(1, 0.1, 1) == 1:                  
+                    if np.random.binomial(1, 0.25, 1) == 1:                  
                         tok = np.random.choice(sub).rstrip().lstrip()               
                         new.append([row[1]["text"].replace(tok, "<MASK>"), row[1]["triplets"].replace(tok, "<MASK>")])                    
                         break
@@ -258,7 +264,9 @@ class BaseModule(pl.LightningModule):
         self.model = model
         self.tokenizer = tokenizer
         self.ontology = conf.ontology
-        self.loss_fn = label_smoothed_nll_loss #torch.nn.CrossEntropyLoss(ignore_index=-100)
+        self.eps_loss = conf.eps_loss
+        self.loss_fn = label_smoothed_nll_loss 
+        #self.loss_fn = torch.nn.CrossEntropyLoss(ignore_index=-100)
         self.num_beams = conf.num_beams
 
     def forward(self, inputs, labels, *args):
@@ -418,6 +426,7 @@ class BaseModule(pl.LightningModule):
         self.log("test_recall_macro_class", class_scores["ALL"]["Macro_r"])
         self.log("test_F1_macro_class", class_scores["ALL"]["Macro_f1"])
 
+
     # additional functions called in main functions
 
     def generate_triples(self, batch, labels) -> None:
@@ -466,8 +475,9 @@ class BaseModule(pl.LightningModule):
         optimizer = AdamW(optimizer_grouped_parameters, lr = conf.lr, betas = (conf.beta1, conf.beta2), eps = conf.epsilon, weight_decay = conf.weight_decay)
 
         def lr_schedule(epoch):
+            k = conf.lr_decay
             if epoch < conf.warm_up: lr_scale =  0.1
-            else: lr_scale = 1 / (epoch**0.25)
+            else: lr_scale = 1 * math.exp(-k*epoch)
             return lr_scale
 
         scheduler = lr_scheduler.LambdaLR(
@@ -481,7 +491,7 @@ class BaseModule(pl.LightningModule):
 
 #In[7]: Helper functions
 
-#from REBEL
+#FROM https://github.com/facebookresearch/fairseq/blob/main/fairseq/criterions/label_smoothed_cross_entropy.py
 def label_smoothed_nll_loss(lprobs, target, ignore_index=-100):
     """From fairseq"""
     eps_loss = conf.eps_loss
@@ -549,11 +559,11 @@ class GenerateTextSamplesCallback(Callback):
         decoded_labels = pl_module.tokenizer.batch_decode(labels, skip_special_tokens=False)
         decoded_inputs = pl_module.tokenizer.batch_decode(batch["input_ids"], skip_special_tokens=False)
 
-        # pl_module.logger.experiment.log_text('generated samples', '\n'.join(decoded_preds).replace('<pad>', ''))
-        # pl_module.logger.experiment.log_text('original samples', '\n'.join(decoded_labels).replace('<pad>', ''))
         for source, translation, gold_output in zip(decoded_inputs, decoded_preds, decoded_labels):
             wandb_table.add_data(
-                source.replace('<pad>', ''), translation.replace('<pad>', ''), gold_output.replace('<pad>', '')
+                source.replace('[PAD]', '').replace("[SEP]",""), 
+                translation.replace('[PAD]', '').replace("[SEP]",""), 
+                gold_output.replace('[PAD]', '').replace("[SEP]","")
             )
         pl_module.logger.experiment.log({"Triplets": wandb_table})
 
@@ -576,7 +586,7 @@ def extract_triplets(text):
     relation, subject, relation, object_ = '', '', '', ''
     text = text.strip()
     current = 'x'
-    for token in text.replace("<s>", "").replace("<pad>", "").replace("</s>", "").split():
+    for token in text.replace("[CLS]", "").replace("[PAD]", "").replace("[SEP]", "").split():
         if token == "<triplet>":
             current = 't'
             if relation != '':
@@ -620,9 +630,10 @@ def re_score(pred_relations, gt_relations):
     if conf.ontology == "pentacode":
         relation_types = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
     else:
-        relation_types = ["Make Public Statement","Appeal","Express Intend To Cooperate","Consult","Engage In Diplomatic Cooperation",
-        "Engage In Material Cooperation","Provide Aid","Yield","Investigate","Demand","Disapprove","Reject",
-        "Threaten","Exhibit Military Posture","Protest","Reduce Relations","Coerce","Assault","Fight","Engage In Unconvential Mass Violence"]
+        relation_types = ["make public statement","appeal","express intend to cooperate","consult","engage in diplomatic cooperation",
+        "engage in material cooperation","provide aid","yield","investigate","demand","disapprove",
+        "reject","threaten","exhibit military posture","protest","reduce relations","coerce",
+        "assault","fight","engage in unconvential mass violence"]
       
     scores = {rel: {"tp": 0, "fp": 0, "fn": 0} for rel in relation_types + ["ALL"]}
     class_scores = {rel: {"tp": 0, "fp": 0, "fn": 0} for rel in relation_types + ["ALL"]}
@@ -795,17 +806,24 @@ def re_score(pred_relations, gt_relations):
 def train(conf):
     pl.seed_everything(conf.seed)
 
-    tokenizer = transformers.AutoTokenizer.from_pretrained("Babelscape/rebel-large", use_fast = conf.use_fast_tokenizer,
-        additional_special_tokens = ["<obj>", "<subj>", "<triplet>", "<head>", "</head>", "<tail>", "</tail>", "<MASK>"])
-    config = transformers.AutoConfig.from_pretrained("Babelscape/rebel-large")
-    model = transformers.AutoModelForSeq2SeqLM.from_pretrained("Babelscape/rebel-large", config = config)
+    add_tokens = ["<obj>", "<subj>", "<triplet>", "<head>", "</head>", "<tail>", "</tail>", "<MASK>"]
+    tokenizer = transformers.AutoTokenizer.from_pretrained("snowood1/ConfliBERT-scr-uncased", use_fast = conf.use_fast_tokenizer,
+            additional_special_tokens = add_tokens)
+    model = transformers.EncoderDecoderModel.from_encoder_decoder_pretrained("snowood1/ConfliBERT-scr-uncased","snowood1/ConfliBERT-scr-uncased", tie_encoder_decoder = True)
 
-    model.resize_token_embeddings(len(tokenizer))
+    config = model.config
+    config.decoder_start_token_id = tokenizer.cls_token_id
+    config.eos_token_id = tokenizer.sep_token_id
+    config.pad_token_id = tokenizer.pad_token_id
+    config.vocab_size = config.encoder.vocab_size
+
+    model.encoder.resize_token_embeddings(len(tokenizer))
+    model.decoder.resize_token_embeddings(len(tokenizer))
 
     pl_data_module = GetData(conf, tokenizer, model)
     pl_module = BaseModule(conf, config, tokenizer, model)
 
-    wandb_logger = WandbLogger(project = "project/pre_train".split('/')[-1].replace('.py', ''), name = "pre_train")
+    wandb_logger = WandbLogger(project = "project/ConfliBERT".split('/')[-1].replace('.py', ''), name = "ConfliBERT")
 
     callbacks_store = []
 
@@ -846,6 +864,7 @@ def train(conf):
     trainer.fit(pl_module, datamodule=pl_data_module)
 
     trainer.test(pl_module, datamodule=pl_data_module)
+
 
 #In[8]: train model
 

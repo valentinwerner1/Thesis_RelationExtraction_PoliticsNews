@@ -1,6 +1,7 @@
 import spacy
+spacy.prefer_gpu(0) #maybe us en_core_web_lg instead of trf if no gpu
 import xml.etree.ElementTree as ET
-from spacy.symbols import nsubj, dobj, pobj, iobj, neg, xcomp, ccomp, VERB
+from spacy.symbols import nsubj, dobj, pobj, iobj, neg, xcomp, ccomp, VERB, AUX
 from gensim.parsing.preprocessing import strip_multiple_whitespaces
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import torch
@@ -10,14 +11,14 @@ import os
 import sys
 
 def main():
-    nlp = spacy.load('en_core_web_lg')
+    nlp = spacy.load('en_core_web_trf')
     read = read_lines(sys.argv[1])
 
     verb_dict, spec_dict, spec_code = verb_code_dict(sys.argv[2], sys.argv[3])
 
     found = []
     not_found = []
-    for line in read:
+    for idx, line in enumerate(read):
         matched, not_matched = get_triples(line, verb_dict, spec_dict, spec_code, nlp)
         if len(not_matched) != 4:   #if list contains sublists (e.g. [[subj, rel, obj, sent], [[subj, rel, obj, sent], [subj, rel, obj, sent]]])
             for sublist in not_matched:
@@ -25,24 +26,26 @@ def main():
         else: not_found.append(not_matched)
         if matched != " ".join([]):
             found.append([line, matched])
+
+        if idx % 10000 == 0: print(f"done with tagging line {idx} out of {len(read)}")
     
     df = pd.DataFrame(found, columns = ["text", "label"])
-<<<<<<< HEAD
     df.to_csv(sys.argv[4])
-    print(df.shape)
-    df_fix = pd.DataFrame(not_found, columns = ["subj", "rel", "obj", "text"])
-    df_fix.to_csv("unmachted.csv")
-    print(df_fix.shape)
-=======
->>>>>>> 3c835c7f58b42976177c0517a09e9f0e78963599
 
+    print("potential triplets: ", len(not_found) + len(found))
+    print("identified triplets: ", len(found))
+    print("missed triplets: ", len(not_found))
+
+    #to check what verbs may need to be added
+    #df_fix = pd.DataFrame(not_found, columns = ["subj", "rel", "obj", "text"])
+    #df_fix.to_csv("unmachted_6.csv")
+
+
+    print("starting entailment prediction...")
     new_df = check_entailment(df)
 
     new_df.to_csv(sys.argv[4])
-<<<<<<< HEAD
     print("dataframe saved...")
-=======
->>>>>>> 3c835c7f58b42976177c0517a09e9f0e78963599
 
 def read_lines(inputparsed):    
     """takes input from CoreNLP sentence parsed file and returns sentences"""
@@ -153,22 +156,22 @@ def verb_code_dict(pico_path, verb_path):
                 if code != "--":
                     if "{" in line:         #conjugated verbs, e.g. "APPLY {APPLYING APPLIED APPLIES } [020]"
                         line_s = re.split("\{|\}", line)    #split at { and }
-                        verb_dict[line_s[0].lower()] = main_codes[code] 
+                        verb_dict[line_s[0].lower().rstrip().lstrip()] = main_codes[code] 
                         for word in line_s[1].split():
-                            verb_dict[word.lower()] = main_codes[code]
+                            verb_dict[word.lower().rstrip().lstrip()] = main_codes[code]
                     else:
                         word = re.split("\[|\]", line)[0]
-                        verb_dict[word.lower()] = main_codes[code]
+                        verb_dict[word.lower().rstrip().lstrip()] = main_codes[code]
             else:
                 if cur_main_code != "--":
                     if "{" in line:         #e.g. "HURRY {HURRIES HURRYING HURRIED }" 
                         line_s = re.split("\{|\}", line)    #split at { and }
-                        verb_dict[line_s[0].lower()] = main_codes[cur_main_code]
+                        verb_dict[line_s[0].lower().rstrip().lstrip()] = main_codes[cur_main_code]
                         for word in line_s[1].split():
-                            verb_dict[word.lower()] = main_codes[cur_main_code]
+                            verb_dict[word.lower().rstrip().lstrip()] = main_codes[cur_main_code]
                     else:                   #only single words with sometimes comments, e.g.: CENSURE  # JON 5/17/95
                         word = line.split("#")[0].rstrip()    #gets part before "#", removes all whitespaces to the right
-                        verb_dict[word.lower()] = main_codes[cur_main_code]
+                        verb_dict[word.lower().rstrip().lstrip()] = main_codes[cur_main_code]
 
     #read multi word patterns and create a dictionary for their code
 
@@ -192,7 +195,7 @@ def verb_code_dict(pico_path, verb_path):
     #generate dictionaries for multi word patterns
     verb_file = open(verb_path, 'r')
     verb_lines = verb_file.readlines()
-
+    
     spec_dict = {}
     spec_code = {}
 
@@ -215,7 +218,10 @@ def verb_code_dict(pico_path, verb_path):
                     poss = gen_poss(line, verb_match, pre_dict)
                     for pattern in poss:
                         spec_code[pattern] = main_codes[code]
-                    spec_dict[verb_match] = poss
+                        if verb_match in spec_dict.keys():
+                            spec_dict[verb_match].append(pattern)
+                        else:
+                            spec_dict[verb_match] = [pattern]
             except:
                 count += 1
 
@@ -238,41 +244,77 @@ def get_triples(sentence, verb_dict, spec_dict, spec_code, nlp):
             if neg in [child.dep for child in possible_verb.children]: continue
             else: 
                 for possible_subject in possible_verb.children: 
-                    if possible_subject.dep == xcomp or possible_subject.dep == ccomp:   #subj / obj of composed verb should also be subj / obj of main verb
-                        main_verb = possible_subject
-                        main_idx = possible_subject.idx
-                        
+                    if possible_subject.dep == ccomp:   #subj / obj of composed verb should also be subj / obj of main verb
+                        sub_verb = possible_subject
+                        sub_idx = possible_subject.idx
                         for chunk in doc.noun_chunks:
                             #check if any words of the chunk are relevant entities 
                             if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
                                 if chunk.root.dep_ == "poss" or chunk.root.dep_ == "prep":
-                                    if chunk.root.head.head.idx == possible_verb.idx:
-                                        verbs.append([main_idx, main_verb.lemma_, chunk.text, chunk.root.head.dep_])
+                                    if chunk.root.head.head.idx == possible_verb.idx or chunk.root.head.head.idx == sub_idx:
+                                        verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.dep_])
+
+                                else:
+                                    if chunk.root.head.idx == possible_verb.idx or chunk.root.head.head.idx == sub_idx:
+                                        verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.dep_])
+
+                    elif possible_subject.dep == xcomp:   #subj / obj of composed verb should also be subj / obj of main verb
+                        sub_verb = possible_subject
+                        sub_idx = possible_subject.idx  #possible verb?
+                        for chunk in doc.noun_chunks:
+                            #check if any words of the chunk are relevant entities 
+                            if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
+                                if chunk.root.dep_ == "poss" or chunk.root.dep_ == "prep" or chunk.root.dep_ == "agent":
+                                    print("check this sentence for poss xcomp",sentence)
+                                    if chunk.root.head.idx == possible_verb.idx or chunk.root.head.head.idx == sub_idx:
+                                        #print("verb xcomp, poss / prep", sentence)
+                                        verbs.append([possible_verb.idx, sub_verb.lemma_, chunk.text, chunk.root.dep_])
 
                                 else:
                                     if chunk.root.head.idx == possible_verb.idx:
-                                        verbs.append([main_idx, main_verb.lemma_, chunk.text, chunk.root.dep_])
+                                        verbs.append([sub_idx, sub_verb.lemma_, chunk.text, chunk.root.dep_])
 
 
                 for chunk in doc.noun_chunks:       #for normal verbs, check chunks directly
                     #check if any words of the chunk are relevant entities 
                     if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
-                        if chunk.root.head.dep_ == "poss" or chunk.root.head.dep_ == "prep":
+                        if chunk.root.head.dep_ == "poss" or chunk.root.head.dep_ == "prep" or chunk.root.dep_ == "agent":
                             if chunk.root.head.head.idx == possible_verb.idx:
-                                verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.head.dep_])
+                                verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.dep_])
 
                         else:
                             if chunk.root.head.idx == possible_verb.idx:
                                 verbs.append([possible_verb.idx, possible_verb.lemma_, chunk.text, chunk.root.dep_])
 
 
+        elif possible_verb.pos == AUX:# or possible_verb.pos == VERB:
+            for possible_subject in possible_verb.children: 
+                if possible_subject.dep == xcomp:   #subj / obj of composed verb should also be subj / obj of main verb
+                    sub_verb = possible_subject
+                    sub_idx = possible_subject.idx
+                    for chunk in doc.noun_chunks:
+                        #check if any words of the chunk are relevant entities 
+                        if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
+                            if chunk.root.dep_ == "poss" or chunk.root.dep_ == "prep" or chunk.root.dep_ == "agent":
+                                print("verb xcomp, poss / prep", sentence)
+                                if chunk.root.head.idx == possible_verb.idx or chunk.root.head.head.idx == sub_idx:
+                                    verbs.append([possible_verb.idx, sub_verb.lemma_, chunk.text, chunk.root.dep_])
+
+                            else:
+                                if chunk.root.head.idx == sub_idx:
+                                    verbs.append([sub_idx, sub_verb.lemma_, chunk.text, chunk.root.dep_])
+                                elif chunk.root.head.head.idx == sub_idx:
+                                    verbs.append([chunk.root.head.idx, chunk.root.head.head.lemma_, chunk.text, chunk.root.dep_])
+
+
     #priority for subj-relation-obj triplets
-    mapper = {"nsubj":1,"dobj":2, "pobj":2, "iobj":2}
+    mapper = {"nsubj":1,"dobj":2, "pobj":3, "iobj":4, "appos": 5, "dative": 6, "nsubjpass" : 7} #maybe nsubjpass equivalent to nsubj?
 
     #create df from verbs extracted 
     df = pd.DataFrame(verbs, columns = ["idx", "verb", "noun", "noun_type"])
     df["noun_map"] = df.noun_type.map(mapper)  #turn noun_types into priority 
-
+    df = df.drop_duplicates()
+    df = df.sort_values(["idx","noun_map"])
     triples = []
     not_matched = []
     if df.shape[0] >= 2:
@@ -281,24 +323,29 @@ def get_triples(sentence, verb_dict, spec_dict, spec_code, nlp):
 
         matches = []
         for x in gb.groups:
-            group = gb.get_group(x).sort_values("noun_map")
+            group = gb.get_group(x).reset_index().sort_values("noun_map")
             if group.shape[0] == 2:
                 if group.noun_type.iloc[0] != group.noun_type.iloc[1]:
                     matches.append([group.iloc[0].noun, group.iloc[0].verb, group.iloc[1].noun])
             elif group.shape[0] > 2:
-                for i in range(group.shape[0] - 1):
-                    if group.noun_type.iloc[i] != group.noun_type.iloc[i+1]:
-                        matches.append([group.iloc[0].noun, group.iloc[0].verb, group.iloc[1].noun])
+                already_matched = ["nsubj"]
+                for i in range(1, group.shape[0]):
+                    if group.noun_type.iloc[i] not in already_matched:
+                        matches.append([group.iloc[0].noun, group.iloc[0].verb, group.iloc[i].noun])
+                        already_matched.append(group.noun_type.iloc[i])
     
 
         #turn matches into triples by only keeping those with coded verbs, return code instead of verb
         for match in matches:
+            patt_found = False
             if match[1].lower() in spec_dict:
                 for poss_pattern in spec_dict[match[1].lower()]:
                     if set(poss_pattern.split()).intersection(sentence.split()) == set(poss_pattern.split()):
                         triples.append(f"<triplet> {match[0]} <subj> {match[2]} <obj> {spec_code[poss_pattern]}")
+                        patt_found = True
+
                         
-            elif match[1].lower() in verb_dict:
+            if patt_found == False and match[1].lower() in verb_dict:
                 triples.append(f"<triplet> {match[0]} <subj> {match[2]} <obj> {verb_dict[match[1].lower()]}")
             else: 
                 #print(f"couldn't match {match[1].lower()}")
@@ -309,7 +356,6 @@ def get_triples(sentence, verb_dict, spec_dict, spec_code, nlp):
     return full_triple, not_matched
 
 def check_entailment(df):
-    print("evaluating entailment...")
     cuda_ = "cuda" #all GPUS, specify specific GPUs with "cuda:0"
     device = torch.device(cuda_ if torch.cuda.is_available() else "cpu")
 
@@ -325,7 +371,7 @@ def check_entailment(df):
             sub = split[i*3:i*3+3]
             new.append([row[1]["text"], sub[0].lstrip().rstrip(), sub[1].lstrip().rstrip(), sub[2].lstrip().rstrip()])
 
-    new_df = pd.DataFrame(new, columns = ["text", "subj", "obj", "label"])
+    new_df = pd.DataFrame(new, columns = ["text", "subj", "obj", "label"]).reset_index()
 
     probs_l = []
     for row in new_df.iterrows():
@@ -350,75 +396,10 @@ def check_entailment(df):
         probs_l.append([row[0], prob_label_is_true.item()])
     if device != "cpu": torch.cuda.empty_cache()
 
-    new_df = pd.merge(new_df.reset_index(), pd.DataFrame(probs_l, columns = ["index", "prob"]), on = "index")
+    new_df = pd.merge(new_df, pd.DataFrame(probs_l, columns = ["index", "prob"]), on = "index")
     new_df = new_df.drop_duplicates(["text", "prob", "label"], keep = "first")
 
-    keep = new_df[new_df.prob > 0.7]
-
-    #recreate triplets in multi object structure of REBEL
-    res = []
-    last_txt = ""
-    last_subj = ""
-    for row in keep.iterrows():
-        trip = f"<triplet> {row[1]['subj']} <subj> {row[1]['obj']} <obj> {row[1]['label']}"
-        if row[1]["subj"] == last_subj and row[1]["text"] == last_txt:
-            #if shared subject, no new row
-            res[-1] = [res[-1][0], res[-1][1] + f" <subj> {row[1]['obj']} <obj> {row[1]['label']}"]
-        elif row[1]["text"] == last_txt:
-            res[-1] = [res[-1][0], res[-1][1] + " " + trip]
-        else:
-            res.append([row[1]["text"], trip])
-        last_txt = row[1]["text"]
-        last_subj = row[1]["subj"]
-
-    df_new = pd.DataFrame(res, columns = ["text","label"])
-    return df_new
-
-def check_entailment(df):
-    cuda_ = "cuda" #all GPUS, specify specific GPUs with "cuda:0"
-    device = torch.device(cuda_ if torch.cuda.is_available() else "cpu")
-
-    nli_model = AutoModelForSequenceClassification.from_pretrained('facebook/bart-large-mnli')
-    nli_model.to(device)
-    tokenizer = AutoTokenizer.from_pretrained('facebook/bart-large-mnli')
-
-    #split combined triplets into single triplets
-    new = []
-    for row in df.iterrows():
-        split = re.split("<\w*>", row[1]["label"])[1:] #first one is empty
-        for i in range(int(len(split)/3)): #always pairs of 3
-            sub = split[i*3:i*3+3]
-            new.append([row[1]["text"], sub[0].lstrip().rstrip(), sub[1].lstrip().rstrip(), sub[2].lstrip().rstrip()])
-
-    new_df = pd.DataFrame(new, columns = ["text", "subj", "obj", "label"])
-
-    probs_l = []
-    for row in new_df.iterrows():
-        premise = row[1]["text"]
-        subj = row[1]["subj"]
-        rel = row[1]["label"]
-        obj =  row[1]["obj"]
-
-        hypothesis = f'{subj} does {rel} towards {obj}.'
-
-        # run through model pre-trained on MNLI
-        x = tokenizer.encode(premise, hypothesis, return_tensors='pt',
-                            truncation_strategy='only_first')
-        logits = nli_model(x.to(device))[0]
-
-        # we throw away "neutral" (dim 1) and take the probability of
-        # "entailment" (2) as the probability of the label being true 
-        entail_contradiction_logits = logits[:,[0,2]]
-        probs = entail_contradiction_logits.softmax(dim=1)
-        prob_label_is_true = probs[:,1]
-
-        probs_l.append([row[0], prob_label_is_true.item()])
-    if device != "cpu": torch.cuda.empty_cache()
-
-    new_df = pd.merge(new_df.reset_index(), pd.DataFrame(probs_l, columns = ["index", "prob"]), on = "index")
-    new_df = new_df.drop_duplicates(["text", "prob", "label"], keep = "first")
-
-    keep = new_df[new_df.prob > 0.7]
+    keep = new_df[new_df.prob > 0.65]
 
     #recreate triplets
     res = []
@@ -426,7 +407,7 @@ def check_entailment(df):
     last_subj = ""
     for row in keep.iterrows():
         trip = f"<triplet> {row[1]['subj']} <subj> {row[1]['obj']} <obj> {row[1]['label']}"
-        if row[1]["subj"] == last_subj & row[1]["text"] == last_txt:
+        if row[1]["subj"] == last_subj and row[1]["text"] == last_txt:
             #if shared subject, no new row
             res[-1] = [res[-1][0], res[-1][1] + f" <subj> {row[1]['obj']} <obj> {row[1]['label']}"]
         elif row[1]["text"] == last_txt:

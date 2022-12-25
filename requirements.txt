@@ -5,3 +5,4 @@ pandas
 numpy
 pytorch_lightning
 wandb
+gensim

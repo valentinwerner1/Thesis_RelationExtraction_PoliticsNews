@@ -1,0 +1,7 @@
+{"North America": [{"United States": ["nyt"]}, {"Canada": ["cbc"] }, {"Mexico": []}]},
+{"Asia":[{"China": []}, {"Japan": ["jt"]}, {"India": ["it"]},]},
+{"Europe":[{"United Kingdom": ["bbc"]},{"France": ["f24"]}, {"Germany": ["spiegel"]}, {"Russia": ["tass"]}]},
+{"South America":[ {"Brazil": ["folha"]},{"Argentina": ["bat"]}, {"Colombia": []}]},
+{"Africa":[{"Egypt": ["independent"] }, {"Nigeria": []}, {"South Africa": ["ewn"]}]},
+{"Australia":[{"Australia": ["msh"]}]},
+

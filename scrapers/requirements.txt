@@ -1,0 +1,12 @@
+numpy 
+pandas 
+python-dateutil
+
+#Libraries for parsing and getting text from websites
+feedparser
+bs4 
+
+#Libraries for coref
+spacy == 3.4.1
+crosslingual_coreference
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.4.1/en_core_web_sm-3.4.1-py3-none-any.whl

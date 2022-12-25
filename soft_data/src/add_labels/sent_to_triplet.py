@@ -19,6 +19,7 @@ def main():
     found = []
     not_found = []
     for idx, line in enumerate(read):
+    for idx, line in enumerate(read):
         matched, not_matched = get_triples(line, verb_dict, spec_dict, spec_code, nlp)
         if len(not_matched) != 4:   #if list contains sublists (e.g. [[subj, rel, obj, sent], [[subj, rel, obj, sent], [subj, rel, obj, sent]]])
             for sublist in not_matched:
@@ -26,6 +27,9 @@ def main():
         else: not_found.append(not_matched)
         if matched != " ".join([]):
             found.append([line, matched])
+
+        if idx % 10000 == 0: print(f"done with tagging line {idx} out of {len(read)}")
+    
 
         if idx % 10000 == 0: print(f"done with tagging line {idx} out of {len(read)}")
     
@@ -41,6 +45,7 @@ def main():
     #df_fix.to_csv("unmachted_6.csv")
 
 
+    print("starting entailment prediction...")
     print("starting entailment prediction...")
     new_df = check_entailment(df)
 
@@ -309,10 +314,13 @@ def get_triples(sentence, verb_dict, spec_dict, spec_code, nlp):
 
     #priority for subj-relation-obj triplets
     mapper = {"nsubj":1,"dobj":2, "pobj":3, "iobj":4, "appos": 5, "dative": 6, "nsubjpass" : 7} #maybe nsubjpass equivalent to nsubj?
+    mapper = {"nsubj":1,"dobj":2, "pobj":3, "iobj":4, "appos": 5, "dative": 6, "nsubjpass" : 7} #maybe nsubjpass equivalent to nsubj?
 
     #create df from verbs extracted 
     df = pd.DataFrame(verbs, columns = ["idx", "verb", "noun", "noun_type"])
     df["noun_map"] = df.noun_type.map(mapper)  #turn noun_types into priority 
+    df = df.drop_duplicates()
+    df = df.sort_values(["idx","noun_map"])
     df = df.drop_duplicates()
     df = df.sort_values(["idx","noun_map"])
     triples = []
@@ -324,10 +332,16 @@ def get_triples(sentence, verb_dict, spec_dict, spec_code, nlp):
         matches = []
         for x in gb.groups:
             group = gb.get_group(x).reset_index().sort_values("noun_map")
+            group = gb.get_group(x).reset_index().sort_values("noun_map")
             if group.shape[0] == 2:
                 if group.noun_type.iloc[0] != group.noun_type.iloc[1]:
                     matches.append([group.iloc[0].noun, group.iloc[0].verb, group.iloc[1].noun])
             elif group.shape[0] > 2:
+                already_matched = ["nsubj"]
+                for i in range(1, group.shape[0]):
+                    if group.noun_type.iloc[i] not in already_matched:
+                        matches.append([group.iloc[0].noun, group.iloc[0].verb, group.iloc[i].noun])
+                        already_matched.append(group.noun_type.iloc[i])
                 already_matched = ["nsubj"]
                 for i in range(1, group.shape[0]):
                     if group.noun_type.iloc[i] not in already_matched:

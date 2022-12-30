@@ -1,3 +1,6 @@
+##argv1 -> ontology ("pentacode" or "cameo")
+##argv2 -> entity hinting ("true" or "false")
+##argv3 -> entity masking ("spacy" or "gold" or "false")
 
 #In[1]: Dependencies and Pre-sets
 
@@ -37,6 +40,11 @@ from transformers import (
     set_seed,
 )
 
+if sys.argv[2] == "spacy":
+    import spacy
+    spacy.prefer_gpu()
+    nlp = spacy.load('en_core_web_trf')
+
 import wandb
 from pytorch_lightning.loggers.wandb import WandbLogger
 
@@ -63,10 +71,55 @@ cameo_to_penta = {
     "Engage in unconventional mass violence" : "Material Conflict"
 }
 
+def replace_penta(df):
+    penta_map = []
+    for row in df.iterrows():
+        trip_text = row[1]["triplets"]
+        for key in cameo_to_penta.keys():
+            if key in row[1]["triplets"]: trip_text = trip_text.replace(key, cameo_to_penta[key])
+        penta_map.append([row[1]["text"], trip_text])
+    return pd.DataFrame(penta_map, columns = ["text","triplets"])
+
+
+def gold_ent_hints(df):
+    new_sent = []
+    for row in df.iterrows():
+
+        sent = row[1]["text"]
+        label = row[1]["label"]
+
+        #extract subjects and objects from labels
+        subj = re.findall("(?<=<triplet> ).*?(?= <subj>)", row[1]["label"])
+        obj = re.findall("(?<=<subj> ).*?(?= <obj>)", row[1]["label"])
+
+        ents = subj + obj 
+        new_in = "[ENTS] " + " [SEP] ".join(ents) + " [END_ENTS] " + sent
+
+        new_sent.append([new_in, label])
+    return pd.DataFrame(new_sent, columns = ["text","triplets"])
+
+def spacy_ent_hints(df):
+    new_sent = []
+    for row in df.iterrows():
+
+        sent = row[1]["text"]
+        label = row[1]["label"]
+
+        doc = nlp(sent)
+
+        ent_list = []
+
+        for chunk in doc.noun_chunks:
+            #check if any words of the chunk are relevant entities 
+            if set([word.ent_type_ for word in chunk]) & set(["GPE", "NORP", "EVENTS", "FAC", "LAW", "ORG", "PERSON"]) != set():
+                ent_list.append(chunk.text)
+
+        new_in = "[ENTS] " + " [SEP] ".join(ent_list) + " [END_ENTS] " + sent 
+        new_sent.append([new_in, label])
+    return pd.DataFrame(new_sent, columns = ["text","triplets"])
+        
 
 #In[2]: Define dataset
-
-conf = None
 
 #for pretrain data
 train = pd.read_csv("data_src/unsupervised/train.csv", index_col = 0)
@@ -79,35 +132,31 @@ test = pd.read_csv("data_src/unsupervised/test.csv", index_col = 0)
 test = test.rename(columns = {"label":"triplets"})
 
 if sys.argv[1] == "pentacode":
-    penta_map = []
-    for row in train.iterrows():
-        trip_text = row[1]["triplets"]
-        for key in cameo_to_penta.keys():
-            if key in row[1]["triplets"]: trip_text = trip_text.replace(key, cameo_to_penta[key])
-        penta_map.append([row[1]["text"], trip_text])
-    train = pd.DataFrame(penta_map, columns = ["text","triplets"])
 
-    penta_map = []
-    for row in val.iterrows():
-        trip_text = row[1]["triplets"]
-        for key in cameo_to_penta.keys():
-            if key in row[1]["triplets"]: trip_text = trip_text.replace(key, cameo_to_penta[key])
-        penta_map.append([row[1]["text"], trip_text])
-    val = pd.DataFrame(penta_map, columns = ["text","triplets"])
-
-    penta_map = []
-    for row in test.iterrows():
-        trip_text = row[1]["triplets"]
-        for key in cameo_to_penta.keys():
-            if key in row[1]["triplets"]: trip_text = trip_text.replace(key, cameo_to_penta[key])
-        penta_map.append([row[1]["text"], trip_text])
-    test = pd.DataFrame(penta_map, columns = ["text","triplets"])
+    train = replace_penta(train)
+    val = replace_penta(val)
+    test = replace_penta(test)
 
     print("initialized Pentacode data")
 
+#Entity hinting script
+if sys.argv[2] == "gold":
+
+    train = gold_ent_hints(train)
+    val = gold_ent_hints(val)
+    test = gold_ent_hints(test)
+
+elif sys.argv[2] == "spacy":
+
+    train = spacy_ent_hints(train)
+    val = spacy_ent_hints(val)
+    test = spacy_ent_hints(test)
+    print("\n initialised spacy entity hints\n")
+
+print("\ndata shapes:")
 print("train shape", train.shape)
 print("val shape", val.shape)
-print("test shape", test.shape)
+print("test shape", test.shape,"\n")
 
 data_dict = {
     "train": train, 
@@ -117,29 +166,40 @@ data_dict = {
 
 #In[3]: Define config
 
-sweep_config = {
-    'method': 'random'
-    }
-
-metric = {
-    'name': 'val_loss',
-    'goal': 'minimize'   
-    }
-
-#commented out values were originally used but changed after several trainings
-parameters_dict = {
-    'batch_size': {'values': [32, 64]},
-    'lr': {'values': [0.000025,0.00005, 0.000075, 0.0001, 0.000125]},
-    "lr_decay" : {"values":[0.05, 0.1, 0.15, 0.2, 0.3]},
-    "eps_loss" : {"values": [0, 0.05, 0.1, 0.15, 0.2]},
-    "weight_decay" : {"values" : [0.0025, 0.005, 0.0075, 0.01, 0.015]}
-    }
+class conf:
+    #general
+    seed = 0
+    ontology = sys.argv[1] #cameo or pentacode
     
-sweep_config['parameters'] = parameters_dict
+    #input
+    batch_size = 32
+    max_length = 128
+    ignore_pad_token_for_loss = True
+    use_fast_tokenizer = True
+    gradient_acc_steps = 1
+    gradient_clip_value = 10.0
+    load_workers = 50 #50 is 5/8 of plato
+    masking = 1 #after how many epoch should new masking be applied, 0 = no masking
 
-sweep_id = wandb.sweep(sweep_config, project="REBEL_hparams2")
+    #optimizer
+    lr = 0.000075
+    lr_decay = 0.1
+    weight_decay = 0.0025
+    eps_loss = 0.05 #for label smoothed loss
+    warm_up = 1 #num of epochs to warm_up on
 
-sweep_config['metric'] = metric
+    #training
+    monitor_var  = "val_loss"
+    monitor_var_mode = "min"
+    samples_interval = 100
+
+    model_name = "model1.pth"
+    checkpoint_path = f"models/{model_name}"
+    save_top_k = 1
+
+    early_stopping = True
+    patience = 4
+
 
 #In[5]: Pytorch Lightning DataModule
 
@@ -182,7 +242,7 @@ class GetData(pl.LightningDataModule):
                     sub = split[i*3:i*3+3]
                     subj = sub[0]
                     obj = sub[1]             
-                    if np.random.binomial(1, 0.15, 1) == 1:                  
+                    if np.random.binomial(1, 0.25, 1) == 1:                  
                         tok = np.random.choice(sub).rstrip().lstrip()               
                         new.append([row[1]["text"].replace(tok, "<MASK>"), row[1]["triplets"].replace(tok, "<MASK>")])                    
                         break
@@ -223,7 +283,7 @@ class BaseModule(pl.LightningModule):
         self.conf = conf
         self.model = model
         self.tokenizer = tokenizer
-        self.ontology = sys.argv[1]
+        self.ontology = conf.ontology
         self.eps_loss = conf.eps_loss
         self.loss_fn = label_smoothed_nll_loss #torch.nn.CrossEntropyLoss(ignore_index=-100)
         self.num_beams = 3
@@ -255,8 +315,6 @@ class BaseModule(pl.LightningModule):
         outputs['predictions'], outputs['labels'] = self.generate_triples(batch, labels)
         outputs["loss"] = forward_output['loss']
         return outputs
-
-        #return forward_output['loss']
 
     def validation_step(self, batch: dict, batch_idx):
         labels = batch.pop("labels")
@@ -311,11 +369,6 @@ class BaseModule(pl.LightningModule):
 
         for key in sorted(metrics.keys()):
             self.log(key, metrics[key], prog_bar=True)
-        
-        #### what does this actually do? how does this change everything
-        # if self.hparams.finetune:
-        #     return {'predictions': self.forward_samples(batch, labels)}
-        # else:
 
         outputs = {}
         outputs['predictions'], outputs['labels'] = self.generate_triples(batch, labels)
@@ -585,7 +638,7 @@ def re_score(pred_relations, gt_relations):
         vocab (Vocab) :         dataset vocabulary
         mode (str) :            in 'strict' or 'boundaries' """
 
-    if sys.argv[1] == "pentacode":
+    if conf.ontology == "pentacode":
         relation_types = ["Make a statement", "Verbal Cooperation", "Material Cooperation", "Verbal Conflict", "Material Conflict"]
     else:
         relation_types = ["Make Public Statement","Appeal","Express Intend to Cooperate","Consult","Engage In Diplomatic Cooperation",
@@ -761,48 +814,47 @@ def re_score(pred_relations, gt_relations):
     return scores, class_scores
 
 #In[7]: Pytorch Trainer
-def train(conf = None):
+def train(conf):
 
-    with wandb.init(config=conf):
+    conf = conf 
+    pl.seed_everything(conf.seed)
+    print(f" batch_size: {conf.batch_size} \n learning rate: {conf.lr} \n learning rate decay: {conf.lr_decay} \n weight decay: {conf.weight_decay} \n epsilon loss: {conf.eps_loss}")
 
-        conf = wandb.config
+    tokenizer = transformers.AutoTokenizer.from_pretrained("Babelscape/rebel-large", use_fast = True,
+        additional_special_tokens = ["<obj>", "<subj>", "<triplet>", "<head>", "</head>", "<tail>", "</tail>", "<MASK>"])
+    config = transformers.AutoConfig.from_pretrained("Babelscape/rebel-large")
+    model = transformers.AutoModelForSeq2SeqLM.from_pretrained("Babelscape/rebel-large", config = config)
 
-        pl.seed_everything(0)
+    model.resize_token_embeddings(len(tokenizer))
 
-        tokenizer = transformers.AutoTokenizer.from_pretrained("Babelscape/rebel-large", use_fast = True,
-            additional_special_tokens = ["<obj>", "<subj>", "<triplet>", "<head>", "</head>", "<tail>", "</tail>", "<MASK>"])
-        config = transformers.AutoConfig.from_pretrained("Babelscape/rebel-large")
-        model = transformers.AutoModelForSeq2SeqLM.from_pretrained("Babelscape/rebel-large", config = config)
+    pl_data_module = GetData(conf, tokenizer, model)
+    pl_module = BaseModule(conf, config, tokenizer, model)
 
-        model.resize_token_embeddings(len(tokenizer))
+    wandb_logger = WandbLogger(project = "project/REBEL".split('/')[-1].replace('.py', ''), name = "Rob", log_model = False)
 
-        pl_data_module = GetData(conf, tokenizer, model)
-        pl_module = BaseModule(conf, config, tokenizer, model)
+    callbacks_store = []
 
-        wandb_logger = WandbLogger(project = "project/REBEL".split('/')[-1].replace('.py', ''), name = "REBEL", log_model = False)
+    callbacks_store.append(GenerateTextSamplesCallback(100))
+    callbacks_store.append(LearningRateMonitor(logging_interval='step'))
 
-        callbacks_store = []
+    trainer = pl.Trainer(
+        accelerator = "gpu",
+        devices = [0],
+        accumulate_grad_batches=1,
+        gradient_clip_val=10,
+        max_epochs = 25,
+        min_epochs = 5,
+        callbacks=callbacks_store,
+        reload_dataloaders_every_n_epochs = 1, 
+        precision=16,
+        amp_level=None,
+        logger=wandb_logger,
+    )
 
-        callbacks_store.append(GenerateTextSamplesCallback(100))
-        callbacks_store.append(LearningRateMonitor(logging_interval='step'))
+    trainer.fit(pl_module, datamodule=pl_data_module)
+    trainer.test(pl_module, datamodule=pl_data_module)
 
-        trainer = pl.Trainer(
-            accelerator = "gpu",
-            devices = [1],
-            accumulate_grad_batches=1,
-            gradient_clip_val=10,
-            max_epochs = 10,
-            min_epochs = 5,
-            callbacks=callbacks_store,
-            reload_dataloaders_every_n_epochs = 1, 
-            precision=16,
-            amp_level=None,
-            logger=wandb_logger,
-        )
+#In[8]: train model
 
-        trainer.fit(pl_module, datamodule=pl_data_module)
-
-
-#In[9]: train model
-
-wandb.agent(sweep_id, train, count=5)
+train(conf)
+#api key is fcfb005aa20d2c3af3389e0a2a6d58a829bfd2ee

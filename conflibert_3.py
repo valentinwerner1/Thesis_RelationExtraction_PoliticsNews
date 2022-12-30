@@ -65,16 +65,14 @@ cameo_to_penta = {
 
 #In[2]: Define dataset
 
-conf = None
-
 #for pretrain data
-train = pd.read_csv("data_src/unsupervised/train.csv", index_col = 0)
+train = pd.read_csv("data_src/unsupervised/train_0.csv", index_col = 0)
 train = train.rename(columns = {"label":"triplets"})
 
-val = pd.read_csv("data_src/unsupervised/val.csv", index_col = 0)
+val = pd.read_csv("data_src/unsupervised/val_0.csv", index_col = 0)
 val = val.rename(columns = {"label":"triplets"})
 
-test = pd.read_csv("data_src/unsupervised/test.csv", index_col = 0)
+test = pd.read_csv("data_src/unsupervised/test_0.csv", index_col = 0)
 test = test.rename(columns = {"label":"triplets"})
 
 if sys.argv[1] == "pentacode":
@@ -114,30 +112,42 @@ data_dict = {
     "test": test
 }
 
-#In[3]: Define config for Random Search
-
-sweep_config = {
-    'method': 'random'
-    }
-
-metric = {
-    'name': 'val_loss',
-    'goal': 'minimize'   
-    }
-
-parameters_dict = {
-    'batch_size': {'values': [32, 64]},
-    'lr': {'values': [0.000025,0.00005, 0.000075, 0.0001, 0.000125]},
-    "lr_decay" : {"values":[0.05, 0.1, 0.15, 0.2, 0.3]},
-    "eps_loss" : {"values": [0, 0.05, 0.1, 0.15, 0.2]},
-    "weight_decay" : {"values" : [0.0025, 0.005, 0.0075, 0.01, 0.015]}
-    }
+#In[3]: Define config
+class conf:
+    #general
+    seed = 0
+    gpus = [1] #1 for any one GPU; [1] for choosing GPU#1
+    ontology = sys.argv[1] #cameo or pentacode
     
-sweep_config['parameters'] = parameters_dict
+    #input
+    batch_size = 32
+    max_length = 128
+    ignore_pad_token_for_loss = True
+    use_fast_tokenizer = True
+    gradient_acc_steps = 1
+    gradient_clip_value = 10.0
+    load_workers = 50 #50 is 5/8 of plato
+    masking = 1 #after how many epoch should new masking be applied, 0 = no masking
 
-sweep_id = wandb.sweep(sweep_config, project="ConfliBERT_hparams2")
+    #optimizer
+    lr = 0.0001
+    lr_decay = 0.1
+    weight_decay = 0.015
+    eps_loss = 0.15 #for label smoothed loss
+    warm_up = 1 #num of epochs to warm_up on
 
-sweep_config['metric'] = metric
+    #training
+    monitor_var  = "val_loss"
+    monitor_var_mode = "min"
+    samples_interval = 100
+
+    model_name = "model1.pth"
+    checkpoint_path = f"models/{model_name}"
+    save_top_k = 1
+
+    early_stopping = True
+    patience = 4
+
 
 #In[5]: Pytorch Lightning DataModule
 
@@ -180,7 +190,7 @@ class GetData(pl.LightningDataModule):
                     sub = split[i*3:i*3+3]
                     subj = sub[0]
                     obj = sub[1]             
-                    if np.random.binomial(1, 0.15, 1) == 1:                  
+                    if np.random.binomial(1, 0.05, 1) == 1:                  
                         tok = np.random.choice(sub).rstrip().lstrip()               
                         new.append([row[1]["text"].replace(tok, "<MASK>"), row[1]["triplets"].replace(tok, "<MASK>")])                    
                         break
@@ -765,54 +775,53 @@ def re_score(pred_relations, gt_relations):
 #In[7]: Pytorch Trainer
 def train(conf=None):
 
-    with wandb.init(config=conf):
-        conf = wandb.config
+    pl.seed_everything(0)
 
-        pl.seed_everything(0)
+    print(f" batch_size: {conf.batch_size} \n learning rate: {conf.lr} \n learning rate decay: {conf.lr_decay} \n weight decay: {conf.weight_decay} \n epsilon loss: {conf.eps_loss}")
 
-        add_tokens = ["<obj>", "<subj>", "<triplet>", "<head>", "</head>", "<tail>", "</tail>", "<MASK>"]
-        tokenizer = transformers.AutoTokenizer.from_pretrained("snowood1/ConfliBERT-scr-uncased", use_fast = True,
-                additional_special_tokens = add_tokens)
-        model = transformers.EncoderDecoderModel.from_encoder_decoder_pretrained("snowood1/ConfliBERT-scr-uncased","snowood1/ConfliBERT-scr-uncased", tie_encoder_decoder = True)
-
-
-        config = model.config
-        config.decoder_start_token_id = tokenizer.cls_token_id
-        config.eos_token_id = tokenizer.sep_token_id
-        config.pad_token_id = tokenizer.pad_token_id
-        config.vocab_size = config.encoder.vocab_size
-
-        model.encoder.resize_token_embeddings(len(tokenizer))
-        model.decoder.resize_token_embeddings(len(tokenizer))
-
-        pl_data_module = GetData(conf, tokenizer, model)
-        pl_module = BaseModule(conf, config, tokenizer, model)
-
-        wandb_logger = WandbLogger(project = "project/ConfliBERT_hparams2".split('/')[-1].replace('.py', ''), name = "ConfliBERT", log_model = False)
-
-        callbacks_store = []
-
-        callbacks_store.append(GenerateTextSamplesCallback(100))
-        callbacks_store.append(LearningRateMonitor(logging_interval='step'))
-
-        trainer = pl.Trainer(
-            accelerator = "gpu",
-            devices = [3],
-            accumulate_grad_batches=1,
-            gradient_clip_val=10,
-            max_epochs = 10,
-            min_epochs = 5,
-            callbacks=callbacks_store,
-            reload_dataloaders_every_n_epochs = 1, 
-            precision=16,
-            amp_level=None,
-            logger=wandb_logger,
-        )
-
-        trainer.fit(pl_module, datamodule=pl_data_module)
+    add_tokens = ["<obj>", "<subj>", "<triplet>", "<head>", "</head>", "<tail>", "</tail>", "<MASK>"]
+    tokenizer = transformers.AutoTokenizer.from_pretrained("snowood1/ConfliBERT-scr-uncased", use_fast = True,
+            additional_special_tokens = add_tokens)
+    model = transformers.EncoderDecoderModel.from_encoder_decoder_pretrained("snowood1/ConfliBERT-scr-uncased","snowood1/ConfliBERT-scr-uncased", tie_encoder_decoder = True)
 
 
-#In[9]: train model
+    config = model.config
+    config.decoder_start_token_id = tokenizer.cls_token_id
+    config.eos_token_id = tokenizer.sep_token_id
+    config.pad_token_id = tokenizer.pad_token_id
+    config.vocab_size = config.encoder.vocab_size
 
-wandb.agent(sweep_id, train, count=5)
-#api key is fcfb005aa20d2c3af3389e0a2a6d58a829bfd2ee
+    model.encoder.resize_token_embeddings(len(tokenizer))
+    model.decoder.resize_token_embeddings(len(tokenizer))
+
+    pl_data_module = GetData(conf, tokenizer, model)
+    pl_module = BaseModule(conf, config, tokenizer, model)
+
+    wandb_logger = WandbLogger(project = "project/ConfliBERT".split('/')[-1].replace('.py', ''), name = "Light-1", log_model = False)
+
+    callbacks_store = []
+
+    callbacks_store.append(GenerateTextSamplesCallback(100))
+    callbacks_store.append(LearningRateMonitor(logging_interval='step'))
+
+    trainer = pl.Trainer(
+        accelerator = "gpu",
+        devices = [3],
+        accumulate_grad_batches=1,
+        gradient_clip_val=10,
+        max_epochs = 30,
+        min_epochs = 5,
+        callbacks=callbacks_store,
+        reload_dataloaders_every_n_epochs = 1, 
+        precision=16,
+        amp_level=None,
+        logger=wandb_logger,
+    )
+
+    trainer.fit(pl_module, datamodule=pl_data_module)
+    trainer.test(pl_module, datamodule=pl_data_module)
+
+
+#In[8]: train model
+
+train(conf)

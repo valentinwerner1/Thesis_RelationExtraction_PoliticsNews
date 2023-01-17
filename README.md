@@ -8,7 +8,7 @@ The leading research question is “How can political entities and the relations
 
 
 ## Repository structure
-
+'''bash
 │   .gitignore
 │   README.md
 │   requirements.txt
@@ -76,7 +76,7 @@ The leading research question is “How can political entities and the relations
             │
             └───preprocess
                     csv_to_xml.py
-
+'''
 
 ## Script usage:
 

@@ -63,6 +63,7 @@ valid inputs are:
 │   │   CAMEO Codebook.pdf
 │   │   figures_thesis.pptx
 │   │   Thesis.pdf
+│   │
 │   ├───annotation_examples
 │   └───generated_img
 │

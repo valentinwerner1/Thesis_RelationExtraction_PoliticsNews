@@ -4,6 +4,8 @@ The repository for my master thesis with the topic "Extracting political relatio
 
 The leading research question is “How can political entities and the relations between them be extracted from news article data and classified using sequence-to-sequence transformer models?” 
 
+The thesis can be found in docs (see repository structure); results can be found on W&B (see results at the bottom of README)
+
 ~ Feel free to reach out for questions or comments
 
 
@@ -12,7 +14,6 @@ The leading research question is “How can political entities and the relations
 Both python scripts are running via command line. They are meant to be executed from the repository root.
 
 First install the requirements using: pip install -r requirements.txt
----
 
 Both training scripts take a multitude of parameters:
 

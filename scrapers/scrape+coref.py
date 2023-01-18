@@ -31,6 +31,7 @@ headers =  {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:100.0) G
                         ## factors: - how many readers / circulation
                         ##          - political orientation (as central as possible)
                         ##          - must publish in english 
+                        ##          - must have a fitting RSS feed (world politics)
 
 rss_dict = {
     "bbc": "http://feeds.bbci.co.uk/news/world/rss.xml#",                           # UK
@@ -58,8 +59,10 @@ rss_dict = {
 }
 
 os.chdir("..") #puts directory at main
-if os.getcwd() != "/home/valentin_werner/thesis_valentin2":
-    os.chdir(r"/home/valentin_werner/thesis_valentin2")
+
+#path directory should be at main
+# if os.getcwd() != "/home/valentin_werner/thesis_valentin2":
+    # os.chdir(r"/home/valentin_werner/thesis_valentin2")
 
 
 # In[2]:
@@ -136,6 +139,7 @@ def post_process(articles, df):
     #nyt == GMT, bbc == GMT, spiegel == GMT +2, f24 == GMT, tass == GMT +3, 
     #cbc == GMT -4, folha == GMT -3, bat == GMT, jt == GMT +9, it == GMT +5.5, 
     #independent == GMT, ewn == GMT, smh == GMT + 11
+
     new_df["date"] = new_df.DateTime.apply(lambda x: parse(x).date())
 
     tzinfos = {"EDT": -14400, "EST": -14400} #because cbc uses timezone instead of offset
@@ -161,7 +165,7 @@ def run_coref(new_df):
     """applies coreference resolution to the new scraped articles"""
     #load spanbert model, as it is currently one of the state of the art models and achieved best performance on the data
     predictor = Predictor(language="en_core_web_sm", device=-1, model_name="spanbert")
-    #apply coreference resolution
+    #apply coreference resolution, get resolved text with entities replaced
     new_df["coref_text"] = new_df.full_text.apply(lambda x: predictor.predict(x)["resolved_text"])
     
     return new_df

@@ -14,6 +14,7 @@ def main():
     nlp = spacy.load('en_core_web_trf')
     read = read_lines(sys.argv[1])
 
+    #load cameo dictionary
     verb_dict, spec_dict, spec_code = verb_code_dict(sys.argv[2], sys.argv[3])
 
     found = []
@@ -22,10 +23,10 @@ def main():
         matched, not_matched = get_triples(line, verb_dict, spec_dict, spec_code, nlp)
         if len(not_matched) != 4:   #if list contains sublists (e.g. [[subj, rel, obj, sent], [[subj, rel, obj, sent], [subj, rel, obj, sent]]])
             for sublist in not_matched:
-                not_found.append(sublist)
+                not_found.append(sublist)   #in case one would want to add vers to the dictionary
         else: not_found.append(not_matched)
         if matched != " ".join([]):
-            found.append([line, matched])
+            found.append([line, matched])   #adds text and label 
 
         if idx % 10000 == 0: print(f"done with tagging line {idx} out of {len(read)}")
     
@@ -35,11 +36,6 @@ def main():
     print("potential triplets: ", len(not_found) + len(found))
     print("identified triplets: ", len(found))
     print("missed triplets: ", len(not_found))
-
-    #to check what verbs may need to be added
-    #df_fix = pd.DataFrame(not_found, columns = ["subj", "rel", "obj", "text"])
-    #df_fix.to_csv("unmachted_6.csv")
-
 
     print("starting entailment prediction...")
     new_df = check_entailment(df)
@@ -240,8 +236,8 @@ def get_triples(sentence, verb_dict, spec_dict, spec_code, nlp):
     verbs = []
 
     for possible_verb in doc:
-        if possible_verb.pos == VERB:
-            if neg in [child.dep for child in possible_verb.children]: continue
+        if possible_verb.pos == VERB: #finds verbs in the sentence
+            if neg in [child.dep for child in possible_verb.children]: continue #ignore negated verbs
             else: 
                 for possible_subject in possible_verb.children: 
                     if possible_subject.dep == ccomp:   #subj / obj of composed verb should also be subj / obj of main verb

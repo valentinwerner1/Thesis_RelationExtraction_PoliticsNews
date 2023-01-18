@@ -5,8 +5,9 @@ import xml.etree.ElementTree as ET
 df = pd.read_csv(sys.argv[1])
 
 outputfile = sys.argv[2]
-root = ET.Element("Articles")			
+root = ET.Element("Articles")	#create xml tree
 for row in df.iterrows():
+	#add all xml sub-elements per article
 	art_xml = ET.SubElement(root,"Article", {
 							#"date":row[1]["date"],
 							"url":row[1]["link"],
